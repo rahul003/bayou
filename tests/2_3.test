@@ -1,0 +1,16 @@
+joinServer 0
+joinServer 1
+joinClient 2 0
+joinClient 3 1
+pause
+breakConnection 0 1
+start
+put 2 eyesOfTexas utexas.edu
+put 3 eyesOfTexas cs.utexas.edu
+pause
+restoreConnection 0 1
+start
+stabilize
+get 2 eyesOfTexas
+get 3 eyesOfTexas
+printLog 1

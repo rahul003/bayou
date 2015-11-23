@@ -1,0 +1,16 @@
+joinServer 0
+joinServer 1
+joinServer 2
+joinClient 3 0
+joinClient 4 1
+pause
+breakConnection 0 1
+breakConnection 0 2
+start
+put 4 a helloworld
+stabilize
+pause
+restoreConnection 0 1
+start
+stabilize
+get 3 a
