@@ -22,14 +22,12 @@ using namespace std;
 #  define D(x)
 #endif // DEBUG
 
-extern void* ReceiveMessagesFromMaster(void* _S );
-
 /**
  * returns port number
  * @param  sa sockaddr structure
  * @return    port number contained in sa
  */
- int return_port_no(struct sockaddr *sa) {
+int return_port_no(struct sockaddr *sa) {
     if (sa->sa_family == AF_INET) {
         return (((struct sockaddr_in*)sa)->sin_port);
     }
@@ -44,18 +42,12 @@ void sigchld_handler(int s) {
 }
 
 /**
- * function for server's accept connections thread
- * @param _S Pointer to server class object
+ * Connects to master
+ * @return  true if connection was successfull
  */
- void* AcceptConnectionsServer(void* _S) {
-    Server *S = (Server *)_S;
-
-    int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
-    struct addrinfo hints, *servinfo, *l;
-    struct sockaddr_storage their_addr; // connector's address information
-    socklen_t sin_size;
-    struct sigaction sa;
-    int yes = 1;
+bool Server::ConnectToMaster() {
+    int numbytes, sockfd;
+    struct addrinfo hints, *l, *servinfo;
     char s[INET6_ADDRSTRLEN];
     int rv;
 
@@ -63,45 +55,73 @@ void sigchld_handler(int s) {
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE; // use my IP
-    if ((rv = getaddrinfo(NULL, std::to_string(S->get_my_listen_port()).c_str(),&hints, &servinfo)) != 0) {
+    if ((rv = getaddrinfo(NULL, std::to_string(get_master_listen_port()).c_str(),
+                          &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-        exit (1);
+        return false;
     }
-
-    // loop through all the results and bind to the first we can
-    for (l = servinfo; l != NULL; l = l->ai_next) {
+    // loop through all the results and connect to the first we can
+    for (l = servinfo; l != NULL; l = l->ai_next)
+    {
         if ((sockfd = socket(l->ai_family, l->ai_socktype,
-           l->ai_protocol)) == -1) {
-            perror("server: socket ERROR");
-        continue;
-    }
-
-    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
-     sizeof(int)) == -1) {
-        perror("setsockopt ERROR");
-    exit(1);
-    }
-
-    if (bind(sockfd, l->ai_addr, l->ai_addrlen) == -1) {
-        close(sockfd);
-        perror("server: bind ERROR");
-        continue;
+                             l->ai_protocol)) == -1) {
+            perror("client: socket");
+            continue;
         }
+
+        errno = 0;
+        if (connect(sockfd, l->ai_addr, l->ai_addrlen) == -1) {
+            close(sockfd);
+            // cout << strerror(errno) << endl;
+            continue;
+        }
+
         break;
     }
-    freeaddrinfo(servinfo); // all done with this structure
-
     if (l == NULL) {
-        fprintf(stderr, "server: failed to bind\n");
-        exit(1);
+        return false;
     }
+    freeaddrinfo(servinfo); // all done with this structure
+    set_master_fd(sockfd);
 
-    // S->set_server_sockfd(sockfd);
+    return true;
+}
+
+/**
+ * function for server's accept connections thread
+ * @param _S Pointer to server class object
+ */
+void* AcceptConnections(void* _S) {
+    Server *S = (Server *)_S;
+
+    int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
+    struct addrinfo hints;
+    struct sockaddr_storage their_addr; // connector's address information
+    socklen_t sin_size;
+    struct sigaction sa;
+
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE; // use my IP
+    const char* po = "0";
+
+
+    struct sockaddr_in addr;
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
     if (listen(sockfd, kBacklog) == -1) {
         perror("listen ERROR");
         exit(1);
     }
+
+    // retrieves the randomly assigned port
+    struct sockaddr_in sin;
+    socklen_t len = sizeof(sin);
+    if (getsockname(sockfd, (struct sockaddr *)&sin, &len) == -1)
+        perror("getsockname");
+    else
+        S->set_my_listen_port(ntohs(sin.sin_port));
 
     sa.sa_handler = sigchld_handler; // reap all dead processes
     sigemptyset(&sa.sa_mask);
@@ -110,6 +130,7 @@ void sigchld_handler(int s) {
         perror("sigaction");
         exit(1);
     }
+
     while (1) {
         // main accept() loop
         sin_size = sizeof their_addr;
@@ -118,97 +139,30 @@ void sigchld_handler(int s) {
             perror("accept ERROR");
             continue;
         }
-        int incoming_port = ntohs(return_port_no((struct sockaddr *)&their_addr));
 
-        if (incoming_port == S->get_master_listen_port()) { // incoming connection from master_port
-            S->set_master_fd(new_fd);
-            pthread_t receive_from_master_thread;
-            CreateThread(ReceiveMessagesFromMaster, (void*)S, receive_from_master_thread);
-        }
-        else{
-            //wait for message from this fd.peek. get name, save fd
-            S->WaitForNameAndSetFd(incoming_port, new_fd);
-        }
-        // } else if (incoming_port<=30000){
-        //     S->set_server_fd(incoming_port, new_fd);
-        //     D(cout<<"S"<<S->get_pid()<<"Connected to a server"<<endl;)
-        // }
-        // else{
-        //     S->set_client_fd(incoming_port, new_fd);
-        //     D(cout<<"S"<<S->get_pid()<<"Connected to a client"<<endl;)
-        // }
-    }
-    pthread_exit(NULL);
-}
-
-
-
-/**
- * Connects to a server port
- * @param server_port port of server whose server to connect to
- * @return  true if connection was successfull or already connected
- */
-bool Server::ConnectToServer(const int port) {
-
-    int sockfd;  // listen on sock_fd, new connection on new_fd
-    struct addrinfo hints, *clientinfo, *l;
-    struct sigaction sa;
-    int yes = 1;
-    int rv;
-
-    // set up addrinfo for i.e. self
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE; // use my IP
-    if ((rv = getaddrinfo(NULL, std::to_string(get_my_listen_port()).c_str(),
-                          &hints, &clientinfo)) != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-        exit (1);
-    }
-
-    // loop through all the results and bind to the first we can
-    for (l = clientinfo; l != NULL; l = l->ai_next)
-    {
-        if ((sockfd = socket(l->ai_family, l->ai_socktype,
-                             l->ai_protocol)) == -1) {
-            perror("client: socket ERROR");
-            continue;
-        }
-
-        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
-                       sizeof(int)) == -1) {
+        if (setsockopt(new_fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&kReceiveTimeoutTimeval,
+                       sizeof(struct timeval)) == -1) {
             perror("setsockopt ERROR");
             exit(1);
         }
 
-        if (bind(sockfd, l->ai_addr, l->ai_addrlen) == -1) {
-            close(sockfd);
-            perror("client: bind ERROR");
-            continue;
-        }
-
-        break;
+        int incoming_port = ntohs(return_port_no((struct sockaddr *)&their_addr));
+        S->WaitForNameAndSetFd(incoming_port, new_fd);
     }
-    freeaddrinfo(clientinfo); // all done with this structure
-    if (l == NULL)  {
-        fprintf(stderr, "client: failed to bind\n");
-        exit(1);
-    }
+    pthread_exit(NULL);
+}
 
-    sa.sa_handler = sigchld_handler; // reap all dead processes
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
-    if (sigaction(SIGCHLD, &sa, NULL) == -1) {
-        perror("sigaction");
-        exit(1);
-    }
+/**
+ * Connects to a server port
+ * @param port port of server whose server to connect to
+ * @return  true if connection was successfull
+ */
+bool Server::ConnectToServer(const int port) {
 
-
-    // set up addrinfo for server
-    int numbytes;
-    struct addrinfo *servinfo;
+    int numbytes, sockfd;
+    struct addrinfo hints, *l, *servinfo;
     char s[INET6_ADDRSTRLEN];
+    int rv;
 
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
@@ -222,10 +176,16 @@ bool Server::ConnectToServer(const int port) {
     // loop through all the results and connect to the first we can
     for (l = servinfo; l != NULL; l = l->ai_next)
     {
+        if ((sockfd = socket(l->ai_family, l->ai_socktype,
+                             l->ai_protocol)) == -1) {
+            perror("client: socket");
+            continue;
+        }
+
         errno = 0;
         if (connect(sockfd, l->ai_addr, l->ai_addrlen) == -1) {
             close(sockfd);
-            // if (errno == EBADF) cout << errno << endl;
+            // cout << strerror(errno) << endl;
             continue;
         }
 
@@ -234,9 +194,7 @@ bool Server::ConnectToServer(const int port) {
     if (l == NULL) {
         return false;
     }
-    // int outgoing_port = ntohs(return_port_no((struct sockaddr *)l->ai_addr));
     freeaddrinfo(servinfo); // all done with this structure
-
     WaitForNameAndSetFd(port, sockfd);
     return true;
 }

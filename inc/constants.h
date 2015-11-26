@@ -8,14 +8,18 @@ using namespace std;
 const int kMaxDataSize = 2000 ;          // max number of bytes we can get at once
 const int kBacklog = 20;                // how many pending connections queue will hold
 
-// file paths
-const string kServerExecutable = "../bin/server";
-const string kClientExecutable = "../bin/client";
+const int kMasterPort = 22222;
+
+// file paths``
+const string kServerExecutable = "./bin/server";
+const string kClientExecutable = "./bin/client";
 
 // message templates
 const string kMessageDelim = "$";
 const string kInternalDelim = "-";
 
+const string kDone = "DONE";
+const string kPort = "PORT";
 const string kServerPort = "SPORT";
 const string kIAm = "IAM";
 const string kYouAre = "YOUARE";
@@ -43,5 +47,15 @@ const string kStabilize = "stabilize";
 const string kPause = "pause";
 const string kStart = "start";
 
+// timeout values
+const timeval kReceiveTimeoutTimeval = {
+    0, // tv_sec
+    500 * 1000 //tv_usec (microsec)
+};
+
+const timeval kSelectTimeoutTimeval = {
+    0, // tv_sec
+    500 * 1000 //tv_usec (microsec)
+};
 
 #endif //CONSTANTS_H_

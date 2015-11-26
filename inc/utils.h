@@ -4,7 +4,7 @@
 #include "vector"
 using namespace std;
 
-vector<string> split(const string& s, const char& delimiter);
+std::vector<std::string> split(const std::string &s, char delim);
 void CreateThread(void* (*f)(void* ), void* arg, pthread_t &thread);
 
 

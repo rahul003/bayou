@@ -1,5 +1,6 @@
 #ifndef SERVER_H_
 #define SERVER_H_
+
 #include "vector"
 #include "string"
 #include "set"
@@ -9,9 +10,9 @@
 #include "utils.h"
 using namespace std;
 
-void* ReceiveMessagesFromClient(void* _rcv_thread_arg); //R
+void* ReceiveMessagesFromClient(void* _rcv_thread_arg);
 void* ReceiveMessagesFromMaster(void* _S );
-void* AcceptConnectionsServer(void* _S);
+void* AcceptConnections(void* _S);
 
 class Server {
 public:
@@ -21,12 +22,19 @@ public:
     string CreateName();
 
     bool ConnectToServer(const int port);
+    void ConnectToAllServers(char** argv);
+    bool ConnectToMaster();
 
     void SendMessageToServer(const string, const string &);
     void SendInitialMessageToServer(int , const string &);
+    void SendMessageToMaster(const string & message);
+    void SendDoneToMaster();
+    void EstablishMasterCommunication();
+    void InitialSetup(pthread_t&, pthread_t&);
 
     void ConstructIAmMessage(const string&, const string &, const string& , string &);
     void ConstructMessage(const string&, const string& , string &);
+    void ConstructPortMessage(string& message);
 
     int get_pid();
     string get_name();
@@ -43,6 +51,7 @@ public:
     void set_server_name(int, string);
     void set_client_name(int, string);
     void set_master_fd(int);
+    void set_my_listen_port(int port);
 
 private:
     int pid_;// server's ID. DONT use this for server_listen_port/server_fd
@@ -50,7 +59,7 @@ private:
     bool am_primary_;
 
     int master_listen_port_;
-    int my_port_;
+    int my_listen_port_;
 
     int master_fd_;
 
