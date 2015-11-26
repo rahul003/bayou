@@ -33,6 +33,10 @@ Server::Server(char** argv)
     am_primary_ = (atoi(argv[3]) != 0);
     master_listen_port_ = atoi(argv[4]);
     my_listen_port_ = -1;
+
+    if (am_primary_) {
+        set_name(kPrimary);
+    }
 }
 
 int Server::get_pid() {
@@ -50,31 +54,38 @@ int Server::get_master_listen_port() {
 }
 
 int Server::get_server_fd(const string& name) {
-    int fd;
+    int fd = -1;
     pthread_mutex_lock(&server_lock);
-    fd = server_fd_[name];
+    if (server_fd_.find(name) != server_fd_.end())
+        fd = server_fd_[name];
     pthread_mutex_unlock(&server_lock);
     return fd;
 }
 
 int Server::get_misc_fd(int port) {
-    int fd;
+    int fd = -1;
     pthread_mutex_lock(&misc_fd_lock);
-    fd = misc_fd_[port];
+    if (misc_fd_.find(port) != misc_fd_.end())
+        fd = misc_fd_[port];
     pthread_mutex_unlock(&misc_fd_lock);
     return fd;
 }
 
 string Server::get_server_name(int port) {
-    string name;
+    string name = "";
     pthread_mutex_lock(&server_lock);
-    name = server_name_[port];
+    if (server_name_.find(port) != server_name_.end())
+        name = server_name_[port];
     pthread_mutex_unlock(&server_lock);
     return name;
 }
 
 int Server::get_master_fd() {
     return master_fd_;
+}
+
+void Server::set_name(const string& my_name) {
+    name_ = my_name;
 }
 
 void Server::set_misc_fd(int port, int fd) {
@@ -91,9 +102,11 @@ void Server::set_my_listen_port(int port) {
     my_listen_port_ = port;
 }
 
+void Server::set_client_fd(int port, int fd) {
+    client_fd_[port] = fd;
+}
+
 void Server::set_server_fd(const string& name, int fd) {
-    //we should never remove serverfd/port because can reconnect
-    //TODO: why?
     pthread_mutex_lock(&server_lock);
     server_fd_[name] = fd;
     pthread_mutex_unlock(&server_lock);
@@ -119,6 +132,11 @@ std::unordered_map<int, int> Server::GetMiscFdCopy() {
     return misc_fd_copy;
 }
 
+void Server::RemoveFromMiscFd(int port) {
+    pthread_mutex_lock(&misc_fd_lock);
+    misc_fd_.erase(port);
+    pthread_mutex_unlock(&misc_fd_lock);
+}
 
 void* ReceiveFromMaster(void* _S) {
     Server* S = (Server*)_S;
@@ -273,17 +291,40 @@ void* ReceiveFromServersAndMisc(void* _S) {
                         // ResetFD(fds[i], primary_id);
 
                     } else {
+
                         buf[num_bytes] = '\0';
                         std::vector<string> message = split(string(buf), kMessageDelim[0]);
                         for (const auto &msg : message) {
                             std::vector<string> token = split(string(msg), kInternalDelim[0]);
+                            if (token[0] == kIAm) {
+                                //IAM-CLIENT
+                                //IAM-SERVER-SERVER_NAME
+                                //IAM-NEWSERVER
+                                assert(token.size() >= 2);
+                                
+                                int port = GetPortFromFd(fds[i]);
+                                if (token[1] == kClient) {
+                                    S->set_client_fd(port, fds[i]);
+                                    S->RemoveFromMiscFd(port);
+                                    S->SendDoneToClient(fds[i]);
+                                } else if (token[1] == kServer || token[1] == kNewServer) {
+                                    S->HandleInitialServerHandshake(port, fds[i], token);
+                                    S->RemoveFromMiscFd(port);
+                                }
+                            } else if (token[0] == kYouAre) {
+                                //YOUARE-MY_NAME-IAM-PEERNAME
+                                assert(token.size() == 4);
 
-                            // if (token[0] == ) {
+                                int port = GetPeerPortFromFd(fds[i]);
+                                S->set_name(token[1]);
+                                S->set_server_name(port, token[3]);
+                                S->set_server_fd(token[3], fds[i]);
+                                S->RemoveFromMiscFd(port);
 
-                            // } else {    //other messages
-                            //     D(cout << "S" << S->get_pid()
-                            //       << " : ERROR Unexpected message received: " << msg << endl;)
-                            // }
+                            } else {    //other messages
+                                D(cout << "S" << S->get_pid()
+                                  << " : ERROR Unexpected message received: " << msg << endl;)
+                            }
                         }
                     }
                 }
@@ -293,76 +334,38 @@ void* ReceiveFromServersAndMisc(void* _S) {
     return NULL;
 }
 
-void Server::WaitForNameAndSetFd(int port, int fd)
-{
-    SendOrAskName(fd);
+void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<string>& token) {
+    // token[0] is kIAm
+    if (token[1] == kServer) {  // sending server already has name
+        //IAM-SERVER-SERVER_NAME
+        assert(token.size() == 3);
+        set_server_name(port, token[2]);
+        set_server_fd(token[2], fd);
 
-    char buf[kMaxDataSize];
+        string message;
+        ConstructMessage(kIAm, get_name(), message);
+        SendMessageToServer(token[2], message);
 
-    int num_wait;
-    //if i dont have name, i wait for other party name as well as mine
-    if (name_.empty())
-        num_wait = 2;
-    else
-        num_wait = 1;
-    while (num_wait) {
-        int num_bytes = recv(fd, buf, kMaxDataSize, MSG_PEEK);
-        if (num_bytes  == -1) {
-            D(cout << "S" << get_pid() << " : ERROR in receiving name from someone" << endl;)
-        }
-        else if (num_bytes == 0)
-        {   //connection closed
-            D(cout << "S" << get_pid() << " : ERROR Connection closed by someone while waiting for name" << endl;)
-        }
-        else
-        {
-            buf[num_bytes] = '\0';
-            std::vector<string> messages = split(string(buf), kMessageDelim[0]);
-            for (const auto &msg : messages)
-            {
-                std::vector<string> token = split(string(msg), kInternalDelim[0]);
-                if (token[0] == kIAm)
-                {
-                    num_wait--;
-                    //not new process sends message of foll type
-                    assert(token.size() > 2);
+    } else if (token[1] == kNewServer) {    // sending server is new. Does not have a name
+        string name = CreateName();
+        set_server_name(port, name);
+        set_server_fd(name, fd);
 
-                    if (token[1] == kServer)
-                    {
-                        //kName kServer (name)
-                        set_server_fd(token[2], fd);
-                        set_server_name(port, token[2]);
-                    }
-                    else if (token[1] == kClient)
-                    {
-                        //kName kClient (name)
-                        // set_client_fd(token[2], fd);
-                        // set_client_name(port, token[2]);
-                    }
-                }
-                else if (token[0] == kNewServer)
-                {
-                    num_wait--;
-                    string name = CreateName();
-                    set_server_fd(name, fd);
-                    set_server_name(port, name);
-                    string msg;
-                    ConstructMessage(kYouAre, name, msg);
-                    SendMessageToServer(name, msg);
-                }
-                else if (token[0] == kYouAre)
-                {
-                    num_wait--;
-                    name_ = token[1];
-                }
+        // send his and my name to peer
+        string you_are_msg;
+        string i_am_msg;
+        ConstructMessage(kYouAre, name, you_are_msg);
+        ConstructMessage(kIAm, get_name(), i_am_msg);
 
-            }
-        }
+        string message = you_are_msg;
+        message.pop_back();
+        message = message + kInternalDelim + i_am_msg;
+        SendMessageToServer(name, message);
     }
 }
+
 string Server::CreateName() {
-
-
+    return get_name() + kComma + to_string(5);
 }
 
 void Server::SendOrAskName(int fd) {
@@ -373,10 +376,8 @@ void Server::SendOrAskName(int fd) {
         SendInitialMessageToServer(fd, msg);
     }
     else {
-        //we can remove this if we dont want to send my name.
-        //then our unique identifier for a server has to be the port
         string msg;
-        ConstructMessage(kNewServer, "", msg);
+        ConstructIAmMessage(kIAm, kNewServer, "", msg);
         SendInitialMessageToServer(fd, msg);
     }
 }
@@ -389,11 +390,11 @@ void Server::SendInitialMessageToServer(int fd, const string & message) {
     }
 }
 
-void Server::SendMessageToServer(const string name, const string & message) {
+void Server::SendMessageToServer(const string& name, const string & message) {
     if (send(get_server_fd(name), message.c_str(), message.size(), 0) == -1) {
-        D(cout << "S" << get_pid() << " : ERROR: Cannot send message to S" << name << endl;)
+        D(cout << "S" << get_pid() << " : ERROR: Cannot send message to server " << name << endl;)
     } else {
-        D(cout << "S" << get_pid() << " : Message sent to S" << name << ": " << message << endl;)
+        D(cout << "S" << get_pid() << " : Message sent to server " << name << ": " << message << endl;)
     }
 }
 
@@ -403,6 +404,20 @@ void Server::SendMessageToMaster(const string & message) {
     } else {
         D(cout << "S" << get_pid() << " : Message sent to M" << ": " << message << endl;)
     }
+}
+
+void Server::SendMessageToClient(int fd, const string& message) {
+    if (send(fd, message.c_str(), message.size(), 0) == -1) {
+        D(cout << "S" << get_pid() << " : ERROR: Cannot message to C" << endl;)
+    } else {
+        D(cout << "S" << get_pid() << " : Message sent to C" << ": " << message << endl;)
+    }
+}
+
+void Server::SendDoneToClient(int fd) {
+    string message;
+    ConstructMessage(kDone, "", message);
+    SendMessageToClient(fd, message);
 }
 
 void Server::SendDoneToMaster() {
@@ -436,14 +451,18 @@ void Server::ConnectToAllServers(char** argv) {
     while (i < num_args)
     {
         if (ConnectToServer(atoi(argv[i]))) {
-            D(cout << "S" << get_pid()
-              << " : Connected to server "
-              << get_server_name(atoi(argv[i])) << endl;)
+            // D(cout << "S" << get_pid()
+            //   << " : Connected to server "
+            //   << get_server_name(atoi(argv[i])) << endl;)
         }
         else {
             D(cout << "S" << get_pid()
               << " : ERROR in connecting to server "
               << get_server_name(atoi(argv[i])) << endl;)
+        }
+
+        while (get_server_name(atoi(argv[i])) == "") {
+            usleep(kBusyWaitSleep);
         }
 
         i++;

@@ -5,12 +5,14 @@
 #include "iostream"
 #include "vector"
 #include "string"
+#include "cstring"
 #include "fstream"
 #include "sstream"
 #include "unistd.h"
 #include "signal.h"
 #include "errno.h"
 #include "sys/socket.h"
+
 using namespace std;
 
 #define DEBUG
@@ -75,10 +77,48 @@ void Client::SendMessageToMaster(const string & message) {
     }
 }
 
+void Client::SendMessageToServer(const string & message, int fd) {
+    if (send(fd, message.c_str(), message.size(), 0) == -1) {
+        D(cout << "C" << get_pid() << " : ERROR: Cannot send message to S" << endl;)
+    } else {
+        D(cout << "C" << get_pid() << " : Message sent to S" << ": " << message << endl;)
+    }
+}
+
 void Client::SendDoneToMaster() {
     string message;
     ConstructMessage(kDone, "", message);
     SendMessageToMaster(message);
+}
+
+/**
+ * receives DONE message from someone
+ * @param fd fd on which DONE is expected
+ */
+void Client::WaitForDone(const int fd) {
+    char buf[kMaxDataSize];
+    int num_bytes;
+    errno = 0;
+    if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
+        cout << errno << strerror(errno) << endl;
+        D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+    }
+    else if (num_bytes == 0) {   //connection closed
+        D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+    }
+    else {
+        buf[num_bytes] = '\0';
+        std::vector<string> message = split(string(buf), kMessageDelim[0]);
+        for (const auto &msg : message) {
+            std::vector<string> token = split(string(msg), kInternalDelim[0]);
+            if (token[0] == kDone) {
+                D(cout << "M  : DONE received" << endl;)
+            } else {
+                D(cout << "M  : Unexpected message received at fd="
+                  << fd << ": " << msg << endl;)
+            }
+        }
+    }
 }
 
 /**
@@ -93,10 +133,16 @@ void Client::ConnectToMultipleServers() {
         else {
             D(cout << "C" << get_pid() << " : ERROR in connecting to S." << endl;)
         }
+
+        // send Iam Client message to server
+        string message;
+        ConstructIAmMessage(kIAm, kClient, message);
+        SendMessageToServer(message, get_server_fd(server_port));
+        WaitForDone(get_server_fd(server_port));
     }
 }
 
-void* ReceiveMessagesFromMaster(void* _C) {
+void* ReceiveFromMaster(void* _C) {
     Client* C = (Client*)_C;
     char buf[kMaxDataSize];
     int num_bytes;
@@ -128,9 +174,9 @@ void* ReceiveMessagesFromMaster(void* _C) {
     return NULL;
 }
 
-void Client::ConstructIAmMessage(const string& type,
-                                 const string &process_type,
-                                 string &message) {
+void Client::ConstructIAmMessage(const string & type,
+                                 const string & process_type,
+                                 string & message) {
     message = type + kInternalDelim +
               process_type + kInternalDelim +
               to_string(get_pid()) + kMessageDelim;
@@ -154,11 +200,13 @@ int main(int argc, char *argv[]) {
 
     Client C(argv);
     C.EstablishMasterCommunication();
+
+    pthread_t receive_from_master_thread;
+    CreateThread(ReceiveFromMaster, (void*)&C, receive_from_master_thread);
+
     C.ConnectToMultipleServers();
     C.SendDoneToMaster();
 
-    pthread_t receive_from_master_thread;
-    CreateThread(ReceiveMessagesFromMaster, (void*)&C, receive_from_master_thread);
 
     void *status;
     pthread_join(receive_from_master_thread, &status);

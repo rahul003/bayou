@@ -9,6 +9,7 @@ const int kMaxDataSize = 2000 ;          // max number of bytes we can get at on
 const int kBacklog = 20;                // how many pending connections queue will hold
 
 const int kMasterPort = 22222;
+const string kPrimary = "P";    // primary server's name
 
 // file paths``
 const string kServerExecutable = "./bin/server";
@@ -17,6 +18,7 @@ const string kClientExecutable = "./bin/client";
 // message templates
 const string kMessageDelim = "$";
 const string kInternalDelim = "-";
+const string kComma = ",";
 
 const string kDone = "DONE";
 const string kPort = "PORT";

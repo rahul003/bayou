@@ -3,6 +3,10 @@
 #include "vector"
 #include "iostream"
 #include "sstream"
+#include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
 using namespace std;
 #define DEBUG
 
@@ -41,5 +45,53 @@ void CreateThread(void* (*f)(void* ), void* arg, pthread_t &thread) {
     if (pthread_create(&thread, NULL, f, arg)) {
         D(cout << "U " << ": ERROR: Unable to create thread" << endl;)
         pthread_exit(NULL);
+    }
+}
+
+int GetPortFromFd(int fd) {
+
+    socklen_t len;
+    struct sockaddr_storage addr;
+    int port;
+
+    len = sizeof addr;
+    if (getsockname(fd, (struct sockaddr*)&addr, &len) == -1) {
+        perror("getsockname");
+        return -1;
+    } else {
+        // deal with both IPv4 and IPv6:
+        if (addr.ss_family == AF_INET) {
+            struct sockaddr_in *s = (struct sockaddr_in *)&addr;
+            port = ntohs(s->sin_port);
+        } else { // AF_INET6
+            struct sockaddr_in6 *s = (struct sockaddr_in6 *)&addr;
+            port = ntohs(s->sin6_port);
+        }
+        return port;
+    }
+}
+
+int GetPeerPortFromFd(int fd) {
+    socklen_t len;
+    struct sockaddr_storage addr;
+    // char ipstr[INET6_ADDRSTRLEN];
+    int port;
+
+    len = sizeof addr;
+    if (getpeername(fd, (struct sockaddr*)&addr, &len) == -1) {
+        perror("getsockname");
+        return -1;
+    } else {
+        // deal with both IPv4 and IPv6:
+        if (addr.ss_family == AF_INET) {
+            struct sockaddr_in *s = (struct sockaddr_in *)&addr;
+            port = ntohs(s->sin_port);
+            // inet_ntop(AF_INET, &s->sin_addr, ipstr, sizeof ipstr);
+        } else { // AF_INET6
+            struct sockaddr_in6 *s = (struct sockaddr_in6 *)&addr;
+            port = ntohs(s->sin6_port);
+            // inet_ntop(AF_INET6, &s->sin6_addr, ipstr, sizeof ipstr);
+        }
+        return port;
     }
 }

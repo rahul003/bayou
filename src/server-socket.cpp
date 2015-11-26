@@ -148,7 +148,6 @@ void* AcceptConnections(void* _S) {
 
         int incoming_port = ntohs(return_port_no((struct sockaddr *)&their_addr));
         S->set_misc_fd(incoming_port, new_fd);
-        // S->WaitForNameAndSetFd(incoming_port, new_fd);
     }
     pthread_exit(NULL);
 }
@@ -203,6 +202,6 @@ bool Server::ConnectToServer(const int port) {
     }
     freeaddrinfo(servinfo); // all done with this structure
     set_misc_fd(port, sockfd);
-    // WaitForNameAndSetFd(port, sockfd);
+    SendOrAskName(sockfd);
     return true;
 }

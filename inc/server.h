@@ -18,30 +18,35 @@ void* AcceptConnections(void* _S);
 class Server {
 public:
     Server(char**);
-    void InitializeLocks();
-    void WaitForNameAndSetFd(int port, int fd);
     void SendOrAskName(int fd);
     string CreateName();
-    std::unordered_map<string, int> GetServerFdCopy();
-    std::unordered_map<int, int> GetMiscFdCopy();
-    void CreateFdSet(fd_set& fromset,
-                     vector<int>& fds,
-                     int& fd_max);
 
     bool ConnectToServer(const int port);
     void ConnectToAllServers(char** argv);
     bool ConnectToMaster();
 
-    void SendMessageToServer(const string, const string &);
+    void SendMessageToServer(const string&, const string &);
     void SendInitialMessageToServer(int , const string &);
     void SendMessageToMaster(const string & message);
+    void SendMessageToClient(int fd, const string& message);
+    void SendDoneToClient(int fd);
     void SendDoneToMaster();
+
+    void InitializeLocks();
     void EstablishMasterCommunication();
     void InitialSetup(pthread_t&, pthread_t&, pthread_t&);
+    void HandleInitialServerHandshake(int port, int fd, const std::vector<string>& token);
+
+    void RemoveFromMiscFd(int port);
+    std::unordered_map<string, int> GetServerFdCopy();
+    std::unordered_map<int, int> GetMiscFdCopy();
+    void CreateFdSet(fd_set & fromset,
+                     vector<int>& fds,
+                     int& fd_max);
 
     void ConstructIAmMessage(const string&, const string &, const string& , string &);
     void ConstructMessage(const string&, const string& , string &);
-    void ConstructPortMessage(string& message);
+    void ConstructPortMessage(string & message);
 
     int get_pid();
     string get_name();
@@ -52,7 +57,9 @@ public:
     string get_server_name(int);
     int get_misc_fd(int port);
 
+    void set_name(const string & my_name);
     void set_server_fd(const string&, int);
+    void set_client_fd(int port, int fd);
     void set_server_name(int, const string&);
     void set_master_fd(int);
     void set_my_listen_port(int port);
@@ -71,8 +78,8 @@ private:
     //maps port to name
     std::unordered_map<int, string> server_name_;
     std::unordered_map<string, int> server_fd_;
-    std::unordered_map<int, int> client_fd_; // hash of port to fd
-    std::unordered_map<int, int> misc_fd_; // hash of port to fd for <port,fd> tuples whose origin is not known yet
+    std::unordered_map<int, int> client_fd_; // hash of fd to port
+    std::unordered_map<int, int> misc_fd_; // hash of port to fd for <port, fd> tuples whose origin is not known yet
 
 };
 

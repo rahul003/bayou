@@ -8,7 +8,7 @@
 #include "unordered_map"
 using namespace std;
 
-void* ReceiveMessagesFromMaster(void* _C);
+void* ReceiveFromMaster(void* _C);
 
 class Client {
 public:
@@ -16,13 +16,14 @@ public:
 
     void ConstructMessage(const string& type, const string &body, string &message);
     void SendMessageToMaster(const string & message);
+    void SendMessageToServer(const string & message, int fd);
     void SendDoneToMaster();
     void ConnectToMultipleServers();
     void EstablishMasterCommunication();
     void ConstructIAmMessage(const string& type,
                              const string &process_type,
                              string &message);
-
+    void WaitForDone(const int fd);
 
     bool ConnectToMaster();
     bool ConnectToServer(const int port);

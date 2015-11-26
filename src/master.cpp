@@ -73,12 +73,12 @@ void Master::set_primary_id(const int id) {
 
 void Master::set_server_fd(const int server_id, const int fd) {
     server_fd_[server_id] = fd;
-    SetCloseExecFlag(fd);
+    // SetCloseExecFlag(fd);
 }
 
 void Master::set_client_fd(const int client_id, const int fd) {
     client_fd_[client_id] = fd;
-    SetCloseExecFlag(fd);
+    // SetCloseExecFlag(fd);
 }
 
 void Master::set_server_listen_port(const int server_id, const int port_num) {
@@ -375,7 +375,7 @@ void Master::ReadTest() {
         if (keyword == kJoinServer) {
             int id;
             iss >> id;
-            if (primary_id_ == -1)
+            if (primary_id_ != -1)
                 SpawnServer(id);
             else
             {
