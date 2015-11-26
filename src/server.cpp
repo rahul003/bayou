@@ -97,7 +97,7 @@ void* ReceiveMessagesFromMaster(void* _S ) {
     Server* S = (Server*)_S;
     char buf[kMaxDataSize];
     int num_bytes;
-    D(cout << "S" << S->get_pid() << " : Receiving from M" << endl;)
+    // D(cout << "S" << S->get_pid() << " : Receiving from M" << endl;)
     while (true) {  // always listen to messages from the master
         num_bytes = recv(S->get_master_fd(), buf, kMaxDataSize - 1, 0);
         if (num_bytes == -1) {
@@ -269,7 +269,7 @@ void Server::ConnectToAllServers(char** argv) {
             D(cout << "S" << get_pid() << " : Connected to server " << get_server_name(atoi(argv[i])) << endl;)
         }
         else {
-            D(cout << "S" << get_pid() << " : Failed to connect to server " << get_server_name(atoi(argv[i])) << endl;)
+            D(cout << "S" << get_pid() << " : ERROR in connecting to server " << get_server_name(atoi(argv[i])) << endl;)
         }
 
         i++;

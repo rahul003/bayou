@@ -45,13 +45,6 @@ int Master::get_server_listen_port(const int server_id) {
         return -1;
 }
 
-int Master::get_client_listen_port(const int client_id) {
-    if (client_listen_port_.find(client_id) != client_listen_port_.end())
-        return client_listen_port_[client_id];
-    else
-        return -1;
-}
-
 int Master::get_server_fd(const int server_id) {
     if (server_fd_.find(server_id) != server_fd_.end())
         return server_fd_[server_id];
@@ -90,10 +83,6 @@ void Master::set_client_fd(const int client_id, const int fd) {
 
 void Master::set_server_listen_port(const int server_id, const int port_num) {
     server_listen_port_[server_id] = port_num;
-}
-
-void Master::set_client_listen_port(const int client_id, const int port_num) {
-    client_listen_port_[client_id] = port_num;
 }
 
 void Master::SetCloseExecFlag(const int fd) {
@@ -202,7 +191,7 @@ bool Master::SpawnClient(const int client_id, const int server_id) {
     0 - client executable
     1 - numargs
     2 - client id
-    3 - serverid of server to whom to connect
+    3 - port of server to whom to connect
     4 - master port
     5 onwards - every server's port
     */
@@ -213,8 +202,7 @@ bool Master::SpawnClient(const int client_id, const int server_id) {
     char client_id_arg[10];
     sprintf(client_id_arg, "%d", client_id);
 
-    char server_id_arg[10];
-    sprintf(server_id_arg, "%d", server_id);
+    char server_port_arg[10];
 
     char master_port_arg[10];
     sprintf(master_port_arg, "%d", master_port_);
@@ -226,6 +214,11 @@ bool Master::SpawnClient(const int client_id, const int server_id) {
     for (auto &s_p : server_listen_port_) {
         all_servers_port_arg[i] = new char[10];
         sprintf(all_servers_port_arg[i], "%d", s_p.second);
+
+        if (server_id == s_p.first) {   // server to whom to connect
+            sprintf(server_port_arg, "%d", s_p.second);
+        }
+
         i++;
     }
 
@@ -234,7 +227,7 @@ bool Master::SpawnClient(const int client_id, const int server_id) {
     argv[0] = (char*)kClientExecutable.c_str();
     argv[1] = num_args;
     argv[2] = client_id_arg;
-    argv[3] = server_id_arg;
+    argv[3] = server_port_arg;
     argv[4] = master_port_arg;
     for (int i = num_basic_arg; i < num_arg; i++) {
         argv[i] = all_servers_port_arg[i - num_basic_arg];
@@ -310,7 +303,7 @@ void Master::WaitForPortMessage(const int fd) {
         for (const auto &msg : message) {
             std::vector<string> token = split(string(msg), kInternalDelim[0]);
             // PORT-SERVER-ID-PORT_NUM
-            // PORT-CLIENT-ID-PORT_NUM
+            // or IAM-CLIENT-ID
             if (token[0] == kPort) {
                 if (token[1] == kServer) {
                     int server_id = stoi(token[2]);
@@ -318,11 +311,14 @@ void Master::WaitForPortMessage(const int fd) {
                     D(cout << "M  : PORT received from S" << server_id << endl;)
                     set_server_listen_port(server_id, port_num);
                     set_server_fd(server_id, fd);
-                } else if (token[1] == kClient) {
+                } else {
+                    D(cout << "M  : Unexpected message received at fd="
+                      << fd << ": " << msg << endl;)
+                }
+            } else if (token[0] == kIAm) {
+                if (token[1] == kClient) {
                     int client_id = stoi(token[2]);
-                    int port_num = stoi(token[3]);
-                    D(cout << "M  : PORT received from C" << client_id << endl;)
-                    set_client_listen_port(client_id, port_num);
+                    D(cout << "M  : IAM-CLIENT received from C" << client_id << endl;)
                     set_client_fd(client_id, fd);
                 } else {
                     D(cout << "M  : Unexpected message received at fd="

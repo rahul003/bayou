@@ -28,7 +28,6 @@ public:
     int get_master_port();
     int get_master_fd();
     int get_server_listen_port(const int server_id);
-    int get_client_listen_port(const int client_id);
     int get_num_servers();
     int get_server_fd(const int server_id);
     int get_client_fd(const int client_id);
@@ -38,7 +37,6 @@ public:
     void set_client_fd(const int client_id, const int fd);
     void set_primary_id(const int primary_id);
     void set_server_listen_port(const int server_id, const int port_num);
-    void set_client_listen_port(const int client_id, const int port_num);
 
 private:
     //to kill when exiting
@@ -55,7 +53,6 @@ private:
 
     //map from id given in test to port
     std::unordered_map<int, int> server_listen_port_;
-    std::unordered_map<int, int> client_listen_port_;
 
 };
 #endif //MASTER_H_
