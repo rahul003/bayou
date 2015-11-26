@@ -263,22 +263,27 @@ bool Master::SpawnClient(const int client_id, const int server_id) {
 void Master::WaitForDone(const int fd) {
     char buf[kMaxDataSize];
     int num_bytes;
-    if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-        D(cout << "M  : ERROR in receiving DONE from someone, fd=" << fd << endl;)
-    }
-    else if (num_bytes == 0) {   //connection closed
-        D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
-    }
-    else {
-        buf[num_bytes] = '\0';
-        std::vector<string> message = split(string(buf), kMessageDelim[0]);
-        for (const auto &msg : message) {
-            std::vector<string> token = split(string(msg), kInternalDelim[0]);
-            if (token[0] == kDone) {
-                D(cout << "M  : DONE received" << endl;)
-            } else {
-                D(cout << "M  : Unexpected message received at fd="
-                  << fd << ": " << msg << endl;)
+
+    bool done = false;
+    while (!done) {     // connection with server has timeout
+        if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
+            // D(cout << "M  : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
+        }
+        else {
+            done = true;
+            buf[num_bytes] = '\0';
+            std::vector<string> message = split(string(buf), kMessageDelim[0]);
+            for (const auto &msg : message) {
+                std::vector<string> token = split(string(msg), kInternalDelim[0]);
+                if (token[0] == kDone) {
+                    D(cout << "M  : DONE received" << endl;)
+                } else {
+                    D(cout << "M  : Unexpected message received at fd="
+                      << fd << ": " << msg << endl;)
+                }
             }
         }
     }
@@ -291,42 +296,47 @@ void Master::WaitForDone(const int fd) {
 void Master::WaitForPortMessage(const int fd) {
     char buf[kMaxDataSize];
     int num_bytes;
-    if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-        D(cout << "M  : ERROR in receiving PORT from someone, fd=" << fd << endl;)
-    }
-    else if (num_bytes == 0) {   //connection closed
-        D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
-    }
-    else {
-        buf[num_bytes] = '\0';
-        std::vector<string> message = split(string(buf), kMessageDelim[0]);
-        for (const auto &msg : message) {
-            std::vector<string> token = split(string(msg), kInternalDelim[0]);
-            // PORT-SERVER-ID-PORT_NUM
-            // or IAM-CLIENT-ID
-            if (token[0] == kPort) {
-                if (token[1] == kServer) {
-                    int server_id = stoi(token[2]);
-                    int port_num = stoi(token[3]);
-                    D(cout << "M  : PORT received from S" << server_id << endl;)
-                    set_server_listen_port(server_id, port_num);
-                    set_server_fd(server_id, fd);
+
+    bool done = false;
+    while (!done) {     // connection with server has timeout
+        if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
+            // D(cout << "M  : ERROR in receiving PORT from someone, fd=" << fd << endl;)
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
+        }
+        else {
+            done = true;
+            buf[num_bytes] = '\0';
+            std::vector<string> message = split(string(buf), kMessageDelim[0]);
+            for (const auto &msg : message) {
+                std::vector<string> token = split(string(msg), kInternalDelim[0]);
+                // PORT-SERVER-ID-PORT_NUM
+                // or IAM-CLIENT-ID
+                if (token[0] == kPort) {
+                    if (token[1] == kServer) {
+                        int server_id = stoi(token[2]);
+                        int port_num = stoi(token[3]);
+                        D(cout << "M  : PORT received from S" << server_id << endl;)
+                        set_server_listen_port(server_id, port_num);
+                        set_server_fd(server_id, fd);
+                    } else {
+                        D(cout << "M  : Unexpected message received at fd="
+                          << fd << ": " << msg << endl;)
+                    }
+                } else if (token[0] == kIAm) {
+                    if (token[1] == kClient) {
+                        int client_id = stoi(token[2]);
+                        D(cout << "M  : IAM-CLIENT received from C" << client_id << endl;)
+                        set_client_fd(client_id, fd);
+                    } else {
+                        D(cout << "M  : Unexpected message received at fd="
+                          << fd << ": " << msg << endl;)
+                    }
                 } else {
                     D(cout << "M  : Unexpected message received at fd="
                       << fd << ": " << msg << endl;)
                 }
-            } else if (token[0] == kIAm) {
-                if (token[1] == kClient) {
-                    int client_id = stoi(token[2]);
-                    D(cout << "M  : IAM-CLIENT received from C" << client_id << endl;)
-                    set_client_fd(client_id, fd);
-                } else {
-                    D(cout << "M  : Unexpected message received at fd="
-                      << fd << ": " << msg << endl;)
-                }
-            } else {
-                D(cout << "M  : Unexpected message received at fd="
-                  << fd << ": " << msg << endl;)
             }
         }
     }
@@ -345,7 +355,7 @@ void Master::SendMessageToServer(const int server_id, const string & message) {
     }
 }
 
-void Master::ConstructMessage(const string& type, const string &body, string &message) {
+void Master::ConstructMessage(const string & type, const string & body, string & message) {
     message = type + kInternalDelim + body + kMessageDelim;
 }
 

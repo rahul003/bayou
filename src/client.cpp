@@ -98,24 +98,28 @@ void Client::SendDoneToMaster() {
 void Client::WaitForDone(const int fd) {
     char buf[kMaxDataSize];
     int num_bytes;
-    errno = 0;
-    if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-        cout << errno << strerror(errno) << endl;
-        D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
-    }
-    else if (num_bytes == 0) {   //connection closed
-        D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
-    }
-    else {
-        buf[num_bytes] = '\0';
-        std::vector<string> message = split(string(buf), kMessageDelim[0]);
-        for (const auto &msg : message) {
-            std::vector<string> token = split(string(msg), kInternalDelim[0]);
-            if (token[0] == kDone) {
-                D(cout << "M  : DONE received" << endl;)
-            } else {
-                D(cout << "M  : Unexpected message received at fd="
-                  << fd << ": " << msg << endl;)
+
+    bool done = false;
+    while (!done) { // connection with server has timeout
+        if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
+            // cout << errno << strerror(errno) << endl;
+            // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+        }
+        else {
+            done = true;
+            buf[num_bytes] = '\0';
+            std::vector<string> message = split(string(buf), kMessageDelim[0]);
+            for (const auto &msg : message) {
+                std::vector<string> token = split(string(msg), kInternalDelim[0]);
+                if (token[0] == kDone) {
+                    D(cout << "C" << get_pid() << " : DONE received" << endl;)
+                } else {
+                    D(cout << "C" << get_pid() << " : Unexpected message received at fd="
+                      << fd << ": " << msg << endl;)
+                }
             }
         }
     }
