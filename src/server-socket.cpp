@@ -147,7 +147,8 @@ void* AcceptConnections(void* _S) {
         }
 
         int incoming_port = ntohs(return_port_no((struct sockaddr *)&their_addr));
-        S->WaitForNameAndSetFd(incoming_port, new_fd);
+        S->set_misc_fd(incoming_port, new_fd);
+        // S->WaitForNameAndSetFd(incoming_port, new_fd);
     }
     pthread_exit(NULL);
 }
@@ -182,6 +183,12 @@ bool Server::ConnectToServer(const int port) {
             continue;
         }
 
+        if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&kReceiveTimeoutTimeval,
+                       sizeof(struct timeval)) == -1) {
+            perror("setsockopt ERROR");
+            exit(1);
+        }
+
         errno = 0;
         if (connect(sockfd, l->ai_addr, l->ai_addrlen) == -1) {
             close(sockfd);
@@ -195,6 +202,7 @@ bool Server::ConnectToServer(const int port) {
         return false;
     }
     freeaddrinfo(servinfo); // all done with this structure
-    WaitForNameAndSetFd(port, sockfd);
+    set_misc_fd(port, sockfd);
+    // WaitForNameAndSetFd(port, sockfd);
     return true;
 }

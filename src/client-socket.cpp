@@ -98,6 +98,12 @@ bool Client::ConnectToServer(const int port) {
             continue;
         }
 
+        if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&kReceiveTimeoutTimeval,
+                       sizeof(struct timeval)) == -1) {
+            perror("setsockopt ERROR");
+            exit(1);
+        }
+
         errno = 0;
         if (connect(sockfd, l->ai_addr, l->ai_addrlen) == -1) {
             close(sockfd);

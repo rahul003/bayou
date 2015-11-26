@@ -24,6 +24,9 @@ using namespace std;
 #  define D(x)
 #endif // DEBUG
 
+pthread_mutex_t server_lock;
+pthread_mutex_t misc_fd_lock;
+
 Server::Server(char** argv)
 {
     pid_ = atoi(argv[2]);
@@ -46,23 +49,38 @@ int Server::get_master_listen_port() {
     return master_listen_port_;
 }
 
-int Server::get_server_fd(string name) {
-    return server_fd_[name];
+int Server::get_server_fd(const string& name) {
+    int fd;
+    pthread_mutex_lock(&server_lock);
+    fd = server_fd_[name];
+    pthread_mutex_unlock(&server_lock);
+    return fd;
 }
-int Server::get_client_fd(string name) {
-    return client_fd_[name];
+
+int Server::get_misc_fd(int port) {
+    int fd;
+    pthread_mutex_lock(&misc_fd_lock);
+    fd = misc_fd_[port];
+    pthread_mutex_unlock(&misc_fd_lock);
+    return fd;
 }
 
 string Server::get_server_name(int port) {
-    return server_name_[port];
-}
-
-string Server::get_client_name(int port) {
-    return client_name_[port];
+    string name;
+    pthread_mutex_lock(&server_lock);
+    name = server_name_[port];
+    pthread_mutex_unlock(&server_lock);
+    return name;
 }
 
 int Server::get_master_fd() {
     return master_fd_;
+}
+
+void Server::set_misc_fd(int port, int fd) {
+    pthread_mutex_lock(&misc_fd_lock);
+    misc_fd_[port] = fd;
+    pthread_mutex_unlock(&misc_fd_lock);
 }
 
 void Server::set_master_fd(int fd) {
@@ -73,27 +91,36 @@ void Server::set_my_listen_port(int port) {
     my_listen_port_ = port;
 }
 
-void Server::set_server_fd(string name, int fd) {
+void Server::set_server_fd(const string& name, int fd) {
     //we should never remove serverfd/port because can reconnect
-    //if already exists, updated fd
-    //if not created
+    //TODO: why?
+    pthread_mutex_lock(&server_lock);
     server_fd_[name] = fd;
+    pthread_mutex_unlock(&server_lock);
 }
 
-void Server::set_server_name(int port, string name) {
+void Server::set_server_name(int port, const string& name) {
+    pthread_mutex_lock(&server_lock);
     server_name_[port] = name;
-}
-void Server::set_client_name(int port, string name) {
-    client_name_[port] = name;
+    pthread_mutex_unlock(&server_lock);
 }
 
-void Server::set_client_fd(string name, int fd) {
-    //if already exists, updated fd
-    //if not created
-    client_fd_[name] = fd;
+std::unordered_map<string, int> Server::GetServerFdCopy() {
+    pthread_mutex_lock(&server_lock);
+    std::unordered_map<string, int> server_fd_copy(server_fd_);
+    pthread_mutex_unlock(&server_lock);
+    return server_fd_copy;
 }
 
-void* ReceiveMessagesFromMaster(void* _S ) {
+std::unordered_map<int, int> Server::GetMiscFdCopy() {
+    pthread_mutex_lock(&misc_fd_lock);
+    std::unordered_map<int, int> misc_fd_copy(misc_fd_);
+    pthread_mutex_unlock(&misc_fd_lock);
+    return misc_fd_copy;
+}
+
+
+void* ReceiveFromMaster(void* _S) {
     Server* S = (Server*)_S;
     char buf[kMaxDataSize];
     int num_bytes;
@@ -115,8 +142,151 @@ void* ReceiveMessagesFromMaster(void* _S ) {
                 // if (token[0] == ) {
 
                 // } else {    //other messages
-                //     D(cout << "S" << S->get_pid() << " : ERROR Unexpected message received from M" << endl;)
+                //     D(cout << "S" << S->get_pid()
+                //       << " : ERROR Unexpected message received: " << msg << endl;)
                 // }
+            }
+        }
+    }
+    return NULL;
+}
+
+void Server::CreateFdSet(fd_set& fromset,
+                         vector<int>& fds,
+                         int& fd_max) {
+
+    fd_max = INT_MIN;
+    char buf;
+    int fd_temp;
+    FD_ZERO(&fromset);
+    fds.clear();
+
+    // client fds
+    // for (auto it = client_fd_.begin(); it != client_fd_.end(); ) {
+    //     fd_temp = it->first;
+    //     if (fd_temp == -1) {
+    //         continue;
+    //     }
+    //     int rv = recv(fd_temp, &buf, 1, MSG_DONTWAIT | MSG_PEEK);
+    //     if (rv == 0) {
+    //         close(fd_temp);
+    //         it = client_fd_.erase(it);
+    //     } else {
+    //         FD_SET(fd_temp, &fromset);
+    //         fd_max = max(fd_max, fd_temp);
+    //         fds.push_back(fd_temp);
+    //         it++;
+    //     }
+    // }
+
+    // server fds
+    unordered_map<string, int> server_fd_copy = GetServerFdCopy();
+    for (auto it = server_fd_copy.begin(); it != server_fd_copy.end(); ) {
+        fd_temp = it->second;
+        if (fd_temp == -1) {
+            continue;
+        }
+        int rv = recv(fd_temp, &buf, 1, MSG_DONTWAIT | MSG_PEEK);
+        if (rv == 0) {
+            D(cout << "S" << get_pid()
+              << " : ERROR Unexpected peek error in server fd for server "
+              << it->first << endl;)
+            close(fd_temp);
+            it++;
+            // TODO: shoudl I erase it?
+            // if yes, see if locking causes issue
+            // ideally, retirement should take care of removing
+            // this case should never happen
+        } else {
+            FD_SET(fd_temp, &fromset);
+            fd_max = max(fd_max, fd_temp);
+            fds.push_back(fd_temp);
+            it++;
+        }
+    }
+
+    // misc fds
+    unordered_map<int, int> misc_fd_copy = GetMiscFdCopy();
+    for (auto it = misc_fd_copy.begin(); it != misc_fd_copy.end(); ) {
+        fd_temp = it->second;
+        if (fd_temp == -1) {
+            continue;
+        }
+        int rv = recv(fd_temp, &buf, 1, MSG_DONTWAIT | MSG_PEEK);
+        if (rv == 0) {
+            D(cout << "S" << get_pid()
+              << " : ERROR Unexpected peek error in misc fd for tuple <"
+              << it->first << "," << it->second << ">" << endl;)
+            close(fd_temp);
+            it++;
+            // TODO: shoudl I erase it?
+            // if yes, see if locking causes issue
+            // ideally, this case should never happen
+        } else {
+            FD_SET(fd_temp, &fromset);
+            fd_max = max(fd_max, fd_temp);
+            fds.push_back(fd_temp);
+            it++;
+        }
+    }
+}
+
+void* ReceiveFromServersAndMisc(void* _S) {
+    Server* S = (Server*)_S;
+    char buf[kMaxDataSize];
+    int num_bytes;
+
+    fd_set fromset;
+    std::vector<int> fds;
+    int fd_max;
+
+    while (true) {
+        S->CreateFdSet(fromset, fds, fd_max);
+
+        if (fd_max == INT_MIN) {
+            usleep(kBusyWaitSleep);
+            continue;
+        }
+
+        struct timeval timeout = kSelectTimeoutTimeval;
+        int rv = select(fd_max + 1, &fromset, NULL, NULL, &timeout);
+        if (rv == -1) { //error in select
+            D(cout << "S" << S->get_pid()
+              << ": ERROR in select() errno=" << errno
+              << " fdmax=" << fd_max << endl;)
+        } else if (rv == 0) {
+            // D(cout << "S" << S->get_pid() << ": Select timeout" << endl;)
+        } else {
+            for (int i = 0; i < fds.size(); i++) {
+                if (FD_ISSET(fds[i], &fromset)) { // we got one!!
+                    if ((num_bytes = recv(fds[i], buf, kMaxDataSize - 1, 0)) == -1) {
+                        D(cout << "S" << S->get_pid()
+                          << ": ERROR in receiving" << endl;)
+
+                        //TODO: What to do here?
+                        // ResetFD(fds[i], primary_id);
+
+                    } else if (num_bytes == 0) {     //connection closed
+                        D(cout << "S" << S->get_pid() << ": Connection closed" << endl;)
+
+                        //TODO: What to do here?
+                        // ResetFD(fds[i], primary_id);
+
+                    } else {
+                        buf[num_bytes] = '\0';
+                        std::vector<string> message = split(string(buf), kMessageDelim[0]);
+                        for (const auto &msg : message) {
+                            std::vector<string> token = split(string(msg), kInternalDelim[0]);
+
+                            // if (token[0] == ) {
+
+                            // } else {    //other messages
+                            //     D(cout << "S" << S->get_pid()
+                            //       << " : ERROR Unexpected message received: " << msg << endl;)
+                            // }
+                        }
+                    }
+                }
             }
         }
     }
@@ -166,8 +336,8 @@ void Server::WaitForNameAndSetFd(int port, int fd)
                     else if (token[1] == kClient)
                     {
                         //kName kClient (name)
-                        set_client_fd(token[2], fd);
-                        set_client_name(port, token[2]);
+                        // set_client_fd(token[2], fd);
+                        // set_client_name(port, token[2]);
                     }
                 }
                 else if (token[0] == kNewServer)
@@ -241,18 +411,18 @@ void Server::SendDoneToMaster() {
     SendMessageToMaster(message);
 }
 
-void Server::ConstructPortMessage(string& message) {
+void Server::ConstructPortMessage(string & message) {
     message = kPort + kInternalDelim +
               kServer + kInternalDelim +
               to_string(get_pid()) + kInternalDelim +
               to_string(get_my_listen_port()) + kMessageDelim;
 }
 
-void Server::ConstructMessage(const string& type, const string &body, string &message) {
+void Server::ConstructMessage(const string & type, const string & body, string & message) {
     message = type + kInternalDelim + body + kMessageDelim;
 }
 
-void Server::ConstructIAmMessage(const string& type, const string &process_type, const string& name, string &message) {
+void Server::ConstructIAmMessage(const string & type, const string & process_type, const string & name, string & message) {
     message = type + kInternalDelim + process_type + kInternalDelim + name + kMessageDelim;
 }
 
@@ -266,10 +436,14 @@ void Server::ConnectToAllServers(char** argv) {
     while (i < num_args)
     {
         if (ConnectToServer(atoi(argv[i]))) {
-            D(cout << "S" << get_pid() << " : Connected to server " << get_server_name(atoi(argv[i])) << endl;)
+            D(cout << "S" << get_pid()
+              << " : Connected to server "
+              << get_server_name(atoi(argv[i])) << endl;)
         }
         else {
-            D(cout << "S" << get_pid() << " : ERROR in connecting to server " << get_server_name(atoi(argv[i])) << endl;)
+            D(cout << "S" << get_pid()
+              << " : ERROR in connecting to server "
+              << get_server_name(atoi(argv[i])) << endl;)
         }
 
         i++;
@@ -294,10 +468,12 @@ void Server::EstablishMasterCommunication() {
  * creating receive threads for master.
  * @param accept_connections_thread  thread for accepting incoming connections
  * @param receive_from_master_thread thread for receiving from master
+ * @param receive_from_servers_thread thread for receiving from servers
  */
 void Server::InitialSetup(pthread_t& accept_connections_thread,
-                          pthread_t& receive_from_master_thread) {
-
+                          pthread_t& receive_from_master_thread,
+                          pthread_t& receive_from_servers_thread) {
+    InitializeLocks();
     CreateThread(AcceptConnections, (void*)this, accept_connections_thread);
 
     while (get_my_listen_port() == -1) {
@@ -305,16 +481,34 @@ void Server::InitialSetup(pthread_t& accept_connections_thread,
     }
     EstablishMasterCommunication();
 
-    CreateThread(ReceiveMessagesFromMaster, (void*)this, receive_from_master_thread);
+    CreateThread(ReceiveFromMaster, (void*)this, receive_from_master_thread);
+    CreateThread(ReceiveFromServersAndMisc, (void*)this, receive_from_servers_thread);
+}
+
+/**
+ * Initialize all mutex locks
+ */
+void Server::InitializeLocks() {
+    if (pthread_mutex_init(&server_lock, NULL) != 0) {
+        D(cout << "S" << get_pid() << " : Mutex init failed" << endl;)
+        pthread_exit(NULL);
+    }
+    if (pthread_mutex_init(&misc_fd_lock, NULL) != 0) {
+        D(cout << "S" << get_pid() << " : Mutex init failed" << endl;)
+        pthread_exit(NULL);
+    }
 }
 
 int main(int argc, char *argv[]) {
     signal(SIGPIPE, SIG_IGN);
     pthread_t accept_connections_thread;
     pthread_t receive_from_master_thread;
+    pthread_t receive_from_servers_thread;
 
     Server S(argv);
-    S.InitialSetup(accept_connections_thread, receive_from_master_thread);
+    S.InitialSetup(accept_connections_thread,
+                   receive_from_master_thread,
+                   receive_from_servers_thread);
 
     S.ConnectToAllServers(argv);
     S.SendDoneToMaster();
@@ -322,5 +516,6 @@ int main(int argc, char *argv[]) {
     void* status;
     pthread_join(accept_connections_thread, &status);
     pthread_join(receive_from_master_thread, &status);
+    pthread_join(receive_from_servers_thread, &status);
     return 0;
 }
