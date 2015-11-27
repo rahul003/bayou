@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <assert.h>
 
 using namespace std;
 #define DEBUG
@@ -93,5 +94,38 @@ int GetPeerPortFromFd(int fd) {
             // inet_ntop(AF_INET6, &s->sin6_addr, ipstr, sizeof ipstr);
         }
         return port;
+    }
+}
+
+string WriteToString(IdTuple i, Command c){
+    string m;
+    m+=i.as_string()+kInternalWriteDelim;
+    m+=c.as_string();
+    return m;
+}
+
+string ClockToString(unordered_map<string, int> vc){
+    string m;
+    bool first= false;
+    for(auto it=vc.begin(); it!=vc.end(); it++)
+    {
+        if(it!=vc.begin())
+            m+=kInternalListDelim;
+        m+=it->first;
+        m+=kInternalMapDelim;
+        m+=to_string(it->second);
+    }
+    return m;
+}
+
+
+void StringToClock(string m, unordered_map<string, int>& rval){
+    vector<string> parts = split(m, kInternalListDelim[0]);
+    //check what split returns when delim not found
+    for(auto &p: parts)
+    {
+        vector<string> tokens = split(p, kInternalMapDelim[0]);
+        assert(tokens.size()==2);
+        rval[tokens[0]]=stoi(tokens[1]);
     }
 }
