@@ -24,6 +24,7 @@ const string kInternalListDelim = "`";
 const string kInternalWriteDelim = "^";
 const string kComma = ",";
 const string kSemiColon = ";";
+const string kName = "!";
 
 const string kDone = "DONE";
 const string kPort = "PORT";
@@ -63,6 +64,10 @@ const string kPut = "put";
 const string kUndo = "undo";
 const string kGet = "get";
 const string kDelete = "delete";
+const string kCreate = "create";
+const string kRetire = "retire";
+const string kPrimRetire = "PrimRetire";
+
 
 const string kStabilize = "stabilize";
 const string kPause = "pause";

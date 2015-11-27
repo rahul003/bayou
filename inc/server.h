@@ -11,6 +11,10 @@
 #include "data_classes.h"
 using namespace std;
 
+typedef enum {
+    UNSET, SET, DONE
+} RetireStatus;
+
 void* ReceiveMessagesFromClient(void* _rcv_thread_arg);
 void* ReceiveFromMaster(void* _S);
 void* ReceiveFromServersAndMisc(void* _S);
@@ -41,6 +45,7 @@ public:
     void SendWriteIdToClient(int);
 
     void AddWrite(string type, string song, string url);
+    void SendAntiEntropyP2(vector<string>& token, int fd);
 
 
     string GetNextServer(string);
@@ -67,6 +72,9 @@ public:
     void ExtractAEP2Message(const string&, const string&);
     void ExecuteCommandsOnDatabase(IdTuple from);
     IdTuple RollBack(const string& committed_writes, const string& tent_writes);
+    void CloseClientConnections();
+    void AddRetireWrite();
+    void WaitForAck(int);
 
 
     int get_pid();
@@ -77,8 +85,8 @@ public:
     int get_server_fd(const string&);
     string get_server_name(int);
     int get_misc_fd(int port);
-    bool get_retiring();
-    void set_retiring();
+    RetireStatus get_retiring();
+    void set_retiring(RetireStatus);
     void set_name(const string & my_name);
     void set_server_fd(const string&, int);
     void set_client_fd(int port, int fd);
@@ -91,7 +99,7 @@ private:
     int pid_;// server's ID. DONT use this for server_listen_port/server_fd
     string name_;
     bool am_primary_;
-    bool retiring_;
+    RetireStatus retiring_;
 
     int master_listen_port_;
     int my_listen_port_;

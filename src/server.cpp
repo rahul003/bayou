@@ -90,17 +90,17 @@ int Server::get_master_fd() {
     return master_fd_;
 }
 
-bool Server::get_retiring() {
-    bool copy;
+RetireStatus Server::get_retiring() {
+    RetireStatus copy;
     pthread_mutex_lock(&retiring_lock);
     copy = retiring_;
     pthread_mutex_unlock(&retiring_lock);
     return copy;
 }
 
-void Server::set_retiring() {
+void Server::set_retiring(RetireStatus s) {
     pthread_mutex_lock(&retiring_lock);
-    retiring_ = true;
+    retiring_ = s;
     pthread_mutex_unlock(&retiring_lock);
 }
 
@@ -158,6 +158,32 @@ void Server::RemoveFromMiscFd(int port) {
     pthread_mutex_unlock(&misc_fd_lock);
 }
 
+void Server::CloseClientConnections()
+{
+    for(auto &c: client_fd_)
+    {
+        close(c.first);
+    }
+    client_fd_.clear();
+}
+
+void Server::AddRetireWrite()
+{
+    vclock_[get_name()]++;
+    IdTuple w;
+    if(am_primary_)
+    {
+        max_csn_++;
+        w = IdTuple(max_csn_, get_name(), vclock_[get_name()]);
+    }
+    else
+        w = IdTuple(INT_MAX, get_name(), vclock_[get_name()]);
+    Command c(kRetire);
+    write_log_[w] = c;
+    // ExecuteCommandsOnDatabase(w);
+    //dont execute as will change vector clock which casues issues with antientropy
+}
+
 void* ReceiveFromMaster(void* _S) {
     Server* S = (Server*)_S;
     char buf[kMaxDataSize];
@@ -177,7 +203,9 @@ void* ReceiveFromMaster(void* _S) {
             for (const auto &msg : message) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kRetireServer) {
-                    S->set_retiring();
+                    S->set_retiring(SET);
+                    S->CloseClientConnections();
+                    S->AddRetireWrite();
                     string send_to = S->GetServerForRetireMessage();
                     string msg = kAntiEntropyP1 + kMessageDelim;
                     S->SendMessageToServer(send_to,msg);
@@ -373,7 +401,9 @@ void Server::ReceiveFromServersAndMiscMode()
 
                                 int port = GetPeerPortFromFd(fds[i]);
                                 set_name(token[1]);
-                                vclock_[name_] = 0;
+                                std::vector<string> v = split(token[1],kName[0]);
+                                vclock_[name_]=stoi(v.back());
+                                //first wriote this server accepts will be with tk+1
                                 set_server_name(port, token[3]);
                                 set_server_fd(token[3], fds[i]);
                                 vclock_[token[3]] = 0;
@@ -385,19 +415,7 @@ void Server::ReceiveFromServersAndMiscMode()
                             }
                             else if(token[0] == kAntiEntropyP1Resp)
                             {
-                                D(assert(token.size()==3);)
-                                int recvd_csn = stoi(token[1]);
-                                unordered_map<string, int> recvd_clock;
-                                StringToClock(token[2], recvd_clock);
-                                string msg;
-                                ConstructAEP2Message(msg, recvd_csn, recvd_clock);
-                                SendMessageToServerByFd(fds[i], msg);
-
-                                if(get_retiring())
-                                {
-                                    SendRetiringMsgToServer(fds[i]);                                    
-                                    SendDoneToMaster();
-                                }
+                                SendAntiEntropyP2(token, fds[i]);
                             }
                             else if (token[0]==kRetiring)
                             { //kretiring-kwasprim-$
@@ -407,6 +425,13 @@ void Server::ReceiveFromServersAndMiscMode()
                                     CommitTentativeWrites();
                                 }
                                 vclock_.erase(get_server_name(fds[i]));
+                                string msg = kAck + kInternalDelim + kMessageDelim;
+                                SendMessageToServerByFd(fds[i],msg);
+                                //removed below lines, coz lets close when the server is actually killed by master
+                                // string name = get_server_name(fds[i]);
+                                // close(fds[i]);
+                                // server_fd_.erase(name);
+                                //not erasing port t- name mapping. coz it requires searching. fuck it
                             }
                             else if(token[0]==kAntiEntropyP2)
                             {
@@ -453,6 +478,32 @@ void Server::ReceiveFromServersAndMiscMode()
                 }
             }
         }
+    }
+}
+void Server::SendAntiEntropyP2(vector<string>& token, int fd)
+{
+    bool was_set = false;
+    if(get_retiring()==SET)
+        was_set = true;
+    
+    D(assert(token.size()==3);)
+    int recvd_csn = stoi(token[1]);
+    unordered_map<string, int> recvd_clock;
+    StringToClock(token[2], recvd_clock);
+    string msg;
+    ConstructAEP2Message(msg, recvd_csn, recvd_clock);
+    SendMessageToServerByFd(fd, msg);
+
+    if(was_set)
+    {
+        string msg = kRetiring + kInternalDelim;
+        if(am_primary_)
+            msg +=kWasPrim;
+        msg+=kInternalDelim+kMessageDelim;
+        SendMessageToServerByFd(fd, msg);
+        WaitForAck(fd);
+        set_retiring(DONE);
+        SendDoneToMaster();
     }
 }
 string Server::GetRelevantWrites(string song)
@@ -554,7 +605,12 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
         string name = CreateName();
         set_server_name(port, name);
         set_server_fd(name, fd);
-        vclock_[name] = 0;
+        vclock_[name_]++;
+        IdTuple w(INT_MAX, name_, vclock_[name_]);
+        write_log_[w] = Command(kCreate);
+        ExecuteCommandsOnDatabase(w);
+        
+        //can also set to vclock[name] = vclock[name_]
 
         // send his and my name to peer
         string you_are_msg;
@@ -651,17 +707,25 @@ IdTuple Server::RollBack(const string& committed_writes, const string& tent_writ
 
     auto it=write_log_.rbegin();
     while(it!=write_log_.rend() && it->first>earliest)
-    {
-        Command undo_c = undo_log_[it->first];
-        if (undo_c.get_type() == kDelete)
+    {   
+        string c_type = it->second.get_type();
+        if(c_type==kCreate || c_type==kRetire)
         {
-            database_.erase(undo_c.get_song());
+            //creation or retire write. has no undo
         }
-        else if(undo_c.get_type()==kUndo)
+        else
         {
-            database_[undo_c.get_song()] = undo_c.get_url();
+            Command undo_c = undo_log_[it->first];
+            if (undo_c.get_type() == kDelete)
+            {
+                database_.erase(undo_c.get_song());
+            }
+            else if(undo_c.get_type()==kUndo)
+            {
+                database_[undo_c.get_song()] = undo_c.get_url();
+            }
+            undo_log_.erase(it->first);
         }
-        undo_log_.erase(it->first);
         it++;
     }
     return earliest;
@@ -699,7 +763,6 @@ void Server::ExtractAEP2Message(const string& committed_writes, const string& te
     ExecuteCommandsOnDatabase(from);
 
 }
-// ExecCommandOnDatabase(w_new, parts[3], parts[4], parts[5]);
 
 void Server::ExecuteCommandsOnDatabase(IdTuple from)
 {
@@ -711,7 +774,6 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
         string song = it->second.get_song();
         string url = it->second.get_url();
         string type = it->second.get_type();
-
         if (type==kPut)
         {
             if(w.get_csn()==INT_MAX)
@@ -730,7 +792,6 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
             }
             else
                 max_csn_ = w.get_csn();
-
             database_[song] = url;
         }
         else if (type==kDelete)
@@ -741,7 +802,15 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
             }
             database_.erase(song);
         }
-
+        else if(type==kCreate)
+        {
+            vclock_[w.get_sname()] = 0;
+        }
+        else if(type==kRetire)
+        {
+            vclock_.erase(w.get_sname());
+        }
+        
         //updating vector clock if behind. it will be behind for new writes
         if(vclock_[w.get_sname()]<w.get_accept_ts())
             vclock_[w.get_sname()] = w.get_accept_ts();
@@ -751,14 +820,8 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
     
 }
 
-void Server::SendRetiringMsgToServer(int fd)
+void Server::WaitForAck(int fd)
 {
-    string msg = kRetiring + kInternalDelim;
-    if(am_primary_)
-        msg+=kWasPrim;
-    msg += kInternalDelim + kMessageDelim;
-
-    SendMessageToServerByFd(fd, msg);
     char buf[kMaxDataSize];
     int num_bytes;
 
@@ -920,6 +983,10 @@ void Server::InitializeLocks() {
         pthread_exit(NULL);
     }
     if (pthread_mutex_init(&misc_fd_lock, NULL) != 0) {
+        D(cout << "S" << get_pid() << " : Mutex init failed" << endl;)
+        pthread_exit(NULL);
+    }
+    if (pthread_mutex_init(&retiring_lock, NULL) != 0) {
         D(cout << "S" << get_pid() << " : Mutex init failed" << endl;)
         pthread_exit(NULL);
     }

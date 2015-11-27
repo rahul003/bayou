@@ -78,6 +78,9 @@ Command::Command(string a, string b)
 Command::Command(){
     
 }
+Command::Command(string type){
+    type_ = type;
+}
 string Command::as_string(){
     string m;
     m+=type_+kInternalWriteDelim;
@@ -85,7 +88,6 @@ string Command::as_string(){
     m+=url_;
     return m;
 }
-
 string Command::get_type(){
     return type_;
 }
