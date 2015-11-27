@@ -167,7 +167,7 @@ bool Master::SpawnServer(const int server_id, bool isPrimary) {
                          environ);
     if (status == 0) {
         D(cout << "M  : Spawned S" << server_id << endl;)
-        all_pids_.push_back(pid);
+        all_pids_[server_id]=pid;
     } else {
         D(cout << "M  : ERROR: Cannot spawn S"
           << server_id << " - " << strerror(status) << endl);
@@ -243,10 +243,10 @@ bool Master::SpawnClient(const int client_id, const int server_id) {
                          environ);
     if (status == 0) {
         D(cout << "M  : Spawned C" << client_id << endl;)
-        all_pids_.push_back(pid);
+        all_pids_[client_id]=pid;
     } else {
         D(cout << "M  : ERROR: Cannot spawn C"
-          << server_id << " - " << strerror(status) << endl);
+          << client_id << " - " << strerror(status) << endl);
         return false;
     }
 
@@ -255,6 +255,12 @@ bool Master::SpawnClient(const int client_id, const int server_id) {
     }
     WaitForDone(get_client_fd(client_id));
     return true;
+}
+
+void Master::SendRetireMessage(int id)
+{
+    string msg = kRetireServer + kMessageDelim;
+    SendMessageToServer(id, msg);
 }
 
 /**
@@ -274,12 +280,12 @@ void Master::WaitForDone(const int fd) {
             D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
         }
         else {
-            done = true;
             buf[num_bytes] = '\0';
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kDone) {
+                    done = true;
                     D(cout << "M  : DONE received" << endl;)
                 } else {
                     D(cout << "M  : Unexpected message received at fd="
@@ -451,9 +457,28 @@ void Master::ConstructMessage(const string & type, const string & body, string &
  */
 void Master::KillAllProcesses() {
     for (auto &p : all_pids_) {
-        if (p != -1) {
-            kill(p, SIGKILL);
+        if (p.second != -1) {
+            kill(p.second, SIGKILL);
         }
+    }
+}
+
+/**
+ * kills the specified server. Set its pid and fd to -1
+ * @param server_id id of server to be killed
+ */
+void Master::CrashServer(const int server_id)
+{
+    int pid = all_pids_[server_id];
+    if (pid != -1) {
+        // TODO: Think whether SIGKILL or SIGTERM
+        // TODO: If using SIGTERM, consider signal handling in server.cpp
+        // close(get_server_fd(server_id));
+        kill(pid, SIGKILL);
+        all_pids_.erase(server_id);
+        // set_server_fd(server_id, -1);
+        // set_server_status(server_id, DEAD);
+        D(cout << "M  : Server S" << server_id << " killed" << endl;)
     }
 }
 
@@ -479,7 +504,16 @@ void Master::ReadTest() {
                 SpawnServer(id, true);
                 set_primary_id(id);
             }
-        } else if (keyword == kJoinClient) {
+        } 
+        else if(keyword==kRetireServer)
+        {
+            int id;
+            iss>>id;
+            SendRetireMessage(id);
+            WaitForDone(get_server_fd(id));
+            CrashServer(id);
+        }
+        else if (keyword == kJoinClient) {
             int cid, sid;
             iss >> cid >> sid;
             SpawnClient(cid, sid);

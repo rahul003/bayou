@@ -34,6 +34,9 @@ const string kUrl = "URL";
 const string kAntiEntropyP1 = "AEP1"; //AEP1$
 const string kAntiEntropyP1Resp = "AEP1R"; //AEP1R-csn-clock(x:0,y:2)$
 const string kAntiEntropyP2 = "AEP2"; 
+const string kRetiring = "RETIRING";
+const string kAck = "ACK";
+const string kWasPrim = "WASPRIM";
 
 const string kServer = "SERVER";
 const string kClient = "CLIENT";

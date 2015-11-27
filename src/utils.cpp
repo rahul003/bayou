@@ -113,6 +113,17 @@ unordered_map<int, int> StringToUnorderedMap(string str) {
     return ans;
 }
 
+ string UnorderedMapToString(unordered_map<int, int>& clock) {
+    // Port,Ts;Port,Ts;Port,ts
+    string msg;
+    for(auto &s: clock)
+    {
+        msg+=to_string(s.first)+kComma;
+        msg+=to_string(s.second)+kSemiColon;
+    }
+    return msg;
+}
+
 string WriteToString(IdTuple i, Command c){
     string m;
     m+=i.as_string()+kInternalWriteDelim;

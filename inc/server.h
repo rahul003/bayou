@@ -21,12 +21,16 @@ public:
     Server(char**);
     void SendOrAskName(int fd);
     string CreateName();
-
+    void CreatePortToClockMap(unordered_map<int, int>& port_to_clock);
+    string GetRelevantWrites(string song);
+    void CommitTentativeWrites();
+    
     bool ConnectToServer(const int port);
     void ConnectToAllServers(char** argv);
     bool ConnectToMaster();
 
     void ReceiveFromServersAndMiscMode();
+    void SendRetiringMsgToServer(int);
 
     void SendMessageToServer(const string&, const string &);
     void SendMessageToServerByFd(int , const string &);
@@ -34,8 +38,14 @@ public:
     void SendMessageToClient(int fd, const string& message);
     void SendDoneToClient(int fd);
     void SendDoneToMaster();
+    void SendWriteIdToClient(int);
+
+    void AddWrite(string type, string song, string url);
+
 
     string GetNextServer(string);
+    string GetServerForRetireMessage();
+
     void SendAEP1Response(int fd);
 
     void InitializeLocks();
@@ -67,7 +77,8 @@ public:
     int get_server_fd(const string&);
     string get_server_name(int);
     int get_misc_fd(int port);
-
+    bool get_retiring();
+    void set_retiring();
     void set_name(const string & my_name);
     void set_server_fd(const string&, int);
     void set_client_fd(int port, int fd);
@@ -80,6 +91,7 @@ private:
     int pid_;// server's ID. DONT use this for server_listen_port/server_fd
     string name_;
     bool am_primary_;
+    bool retiring_;
 
     int master_listen_port_;
     int my_listen_port_;

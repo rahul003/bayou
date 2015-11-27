@@ -27,6 +27,7 @@ using namespace std;
 
 pthread_mutex_t server_lock;
 pthread_mutex_t misc_fd_lock;
+pthread_mutex_t retiring_lock;
 
 Server::Server(char** argv)
 {
@@ -37,9 +38,11 @@ Server::Server(char** argv)
 
     if (am_primary_) {
         set_name(kPrimary);
+        vclock_[name_] = 0;
     }
 
-    max_csn_=-1;
+    max_csn_=0;
+
 }
 
 int Server::get_pid() {
@@ -85,6 +88,20 @@ string Server::get_server_name(int port) {
 
 int Server::get_master_fd() {
     return master_fd_;
+}
+
+bool Server::get_retiring() {
+    bool copy;
+    pthread_mutex_lock(&retiring_lock);
+    copy = retiring_;
+    pthread_mutex_unlock(&retiring_lock);
+    return copy;
+}
+
+void Server::set_retiring() {
+    pthread_mutex_lock(&retiring_lock);
+    retiring_ = true;
+    pthread_mutex_unlock(&retiring_lock);
 }
 
 void Server::set_name(const string& my_name) {
@@ -159,13 +176,15 @@ void* ReceiveFromMaster(void* _S) {
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
-
-                // if (token[0] == ) {
-
-                // } else {    //other messages
-                //     D(cout << "S" << S->get_pid()
-                //       << " : ERROR Unexpected message received: " << msg << endl;)
-                // }
+                if (token[0] == kRetireServer) {
+                    S->set_retiring();
+                    string send_to = S->GetServerForRetireMessage();
+                    string msg = kAntiEntropyP1 + kMessageDelim;
+                    S->SendMessageToServer(send_to,msg);
+                } else {    //other messages
+                    D(cout << "S" << S->get_pid()
+                      << " : ERROR Unexpected message received: " << msg << endl;)
+                }
             }
         }
     }
@@ -184,6 +203,15 @@ void* AntiEntropyP1(void* _S) {
         S->SendMessageToServer(cur_server,msg);
     }
     return NULL;
+}
+string Server::GetServerForRetireMessage(){
+    string rval;
+
+    pthread_mutex_lock(&server_lock);
+    auto it = server_fd_.begin();
+    rval = it->first;
+    pthread_mutex_unlock(&server_lock);
+    return rval;
 }
 
 string Server::GetNextServer(string last){
@@ -345,8 +373,10 @@ void Server::ReceiveFromServersAndMiscMode()
 
                                 int port = GetPeerPortFromFd(fds[i]);
                                 set_name(token[1]);
+                                vclock_[name_] = 0;
                                 set_server_name(port, token[3]);
                                 set_server_fd(token[3], fds[i]);
+                                vclock_[token[3]] = 0;
                                 RemoveFromMiscFd(port);
                             } 
                             else if(token[0] == kAntiEntropyP1)
@@ -362,12 +392,57 @@ void Server::ReceiveFromServersAndMiscMode()
                                 string msg;
                                 ConstructAEP2Message(msg, recvd_csn, recvd_clock);
                                 SendMessageToServerByFd(fds[i], msg);
+
+                                if(get_retiring())
+                                {
+                                    SendRetiringMsgToServer(fds[i]);                                    
+                                    SendDoneToMaster();
+                                }
+                            }
+                            else if (token[0]==kRetiring)
+                            { //kretiring-kwasprim-$
+                                if(token[1]==kWasPrim)
+                                {
+                                    am_primary_ = true;
+                                    CommitTentativeWrites();
+                                }
+                                vclock_.erase(get_server_name(fds[i]));
                             }
                             else if(token[0]==kAntiEntropyP2)
                             {
                                 D(assert(token.size()==4);)
                                 if((!token[2].empty()) || (!token[3].empty()))
                                     ExtractAEP2Message(token[2], token[3]);
+                            }
+                            else if(token[0] == kServerVC)
+                            {
+                                unordered_map<int, int> port_to_clock;
+                                CreatePortToClockMap(port_to_clock);
+                                string msg=kServerVC+kInternalDelim;
+                                msg+=UnorderedMapToString(port_to_clock)+kMessageDelim;
+                                SendMessageToClient(fds[i],msg);
+                            }
+                            else if(token[0]==kGet)
+                            {
+                                string msg = kUrl+kInternalDelim;
+                                msg += database_[token[1]]+kMessageDelim;
+                                SendMessageToClient(fds[i], msg);
+
+                                msg = kRelWrites+kInternalDelim;
+                                msg += GetRelevantWrites(token[1]) + kMessageDelim;
+                                SendMessageToClient(fds[i], msg);
+                            }
+                            else if(token[0] == kPut)
+                            {
+                                D(assert(token.size()==3);)
+                                AddWrite(token[0], token[1], token[2]);
+                                SendWriteIdToClient(fds[i]);
+                            }
+                            else if(token[0] == kDelete)
+                            {
+                                D(assert(token.size()==2);)
+                                AddWrite(token[0], token[1], "");
+                                SendWriteIdToClient(fds[i]);
                             }
                             else {    //other messages
                                 D(cout << "S" << get_pid()
@@ -380,6 +455,81 @@ void Server::ReceiveFromServersAndMiscMode()
         }
     }
 }
+string Server::GetRelevantWrites(string song)
+{
+    unordered_map<int, int> port_to_ts;
+    for(auto &w: write_log_)
+    {
+        if(w.second.get_song()==song)
+        {
+            int p;
+            if(w.first.get_sname()==get_name())
+                p = my_listen_port_;
+            else
+                p = GetPeerPortFromFd(get_server_fd(w.first.get_sname()));
+            port_to_ts[p] = w.first.get_accept_ts();
+        }
+    }
+    
+    return UnorderedMapToString(port_to_ts);
+}
+                                
+void Server::CreatePortToClockMap(unordered_map<int, int>& port_to_clock)
+{
+    for(auto &c: vclock_)
+    {
+        if(c.first==get_name())
+            port_to_clock[my_listen_port_] = c.second;
+        else
+            port_to_clock[GetPeerPortFromFd(get_server_fd(c.first))] = c.second;
+    }
+}
+void Server::SendWriteIdToClient(int fd)
+{
+    string msg = kWriteID+kInternalDelim;
+    msg += to_string(my_listen_port_)+kInternalDelim;
+    msg += to_string(vclock_[get_name()])+kMessageDelim;
+    SendMessageToClient(fd, msg);
+}
+
+void Server::AddWrite(string type, string song, string url)
+{
+    //new writes will have clock from 1
+    vclock_[get_name()]++;
+    IdTuple w;
+    if(am_primary_)
+    {
+        max_csn_++;
+        w = IdTuple(max_csn_, get_name(), vclock_[get_name()]);
+    }
+    else
+        w = IdTuple(INT_MAX, get_name(), vclock_[get_name()]);
+
+    Command c(type,song, url);
+    write_log_[w] = c;
+    ExecuteCommandsOnDatabase(w);
+}
+
+void Server::CommitTentativeWrites(){
+    auto it = write_log_.lower_bound(IdTuple(max_csn_+1,"", 0));
+    IdTuple first;
+    bool first_set = false;
+    while(it!=write_log_.end())
+    {
+        Command c = it->second;
+        IdTuple w = it->first;
+        write_log_.erase(it->first);
+        max_csn_++;
+        w = IdTuple(max_csn_, w.get_sname(), w.get_accept_ts());
+        if (!first_set)
+        {
+            first = w;
+            first_set = true;
+        }
+        write_log_[w] = c;
+    }
+    ExecuteCommandsOnDatabase(first);
+}
 
 void* ReceiveFromServersAndMisc(void* _S) {
     Server* S = (Server*)_S;
@@ -391,9 +541,10 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
     // token[0] is kIAm
     if (token[1] == kServer) {  // sending server already has name
         //IAM-SERVER-SERVER_NAME
-        assert(token.size() == 3);
+        D(assert(token.size() == 3);)
         set_server_name(port, token[2]);
         set_server_fd(token[2], fd);
+        vclock_[token[2]] = 0;
 
         string message;
         ConstructMessage(kIAm, get_name(), message);
@@ -403,6 +554,7 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
         string name = CreateName();
         set_server_name(port, name);
         set_server_fd(name, fd);
+        vclock_[name] = 0;
 
         // send his and my name to peer
         string you_are_msg;
@@ -446,7 +598,7 @@ void Server::SendAEP1Response(int fd)
 
 void Server::ConstructAEP2Message(string& msg, const int& r_csn, unordered_map<string, int>& r_clock)
 {
-    //AEP2-c1.n1.w1.m1-n1.w1,m1
+    //AEP2-c1.n1.w1.m1a.m1b.m1c-n1.w1,m1
     //AEP2-commitedwrites-tentativewrites$
     //only this thread will use max_csn no need of lock
     msg += kAntiEntropyP2+kInternalDelim;
@@ -561,21 +713,31 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
 
         if (type==kPut)
         {
-            if(database_.find(song)==database_.end())
+            if(w.get_csn()==INT_MAX)
             {
-                //wasnt in database
-                undo_log_[w] = Command(kDelete, song);
+                //undo command for a write needed only if tentative
+                if(database_.find(song)==database_.end())
+                {
+                    //wasnt in database
+                    undo_log_[w] = Command(kDelete, song, "");
+                }
+                else
+                {
+                    //overwritten
+                    undo_log_[w] = Command(kUndo, song, database_[song]);
+                }                
             }
             else
-            {
-                //overwritten
-                undo_log_[w] = Command(kUndo, song, database_[song]);
-            }
+                max_csn_ = w.get_csn();
+
             database_[song] = url;
         }
         else if (type==kDelete)
         {
-            undo_log_[w] = Command(kUndo, song, database_[song]);
+            if(w.get_csn()==INT_MAX)
+            {
+                undo_log_[w] = Command(kUndo, song, database_[song]);
+            }
             database_.erase(song);
         }
 
@@ -588,6 +750,41 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
     
 }
 
+void Server::SendRetiringMsgToServer(int fd)
+{
+    string msg = kRetiring + kInternalDelim;
+    if(am_primary_)
+        msg+=kWasPrim;
+    msg += kInternalDelim + kMessageDelim;
+
+    SendMessageToServerByFd(fd, msg);
+    char buf[kMaxDataSize];
+    int num_bytes;
+
+    bool ack = false;
+    while (!ack) {     // connection with server has timeout
+        if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
+            // D(cout << "M  : ERROR in receiving ack from someone, fd=" << fd << endl;)
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
+        }
+        else {
+            buf[num_bytes] = '\0';
+            std::vector<string> message = split(string(buf), kMessageDelim[0]);
+            for (const auto &msg : message) {
+                std::vector<string> token = split(string(msg), kInternalDelim[0]);
+                if (token[0] == kAck) {
+                    ack = true;
+                    D(cout << "S  "<<get_name()<<": ACK received" << endl;)
+                } else {
+                    D(cout << "S  "<<get_name()<<": Unexpected message received at fd="
+                      << fd << ": " << msg << endl;)
+                }
+            }
+        }
+    }
+}
 
 void Server::SendMessageToServerByFd(int fd, const string & message) {
     if (send(fd, message.c_str(), message.size(), 0) == -1) {
