@@ -11,9 +11,8 @@
 #include "data_classes.h"
 using namespace std;
 
-void* ReceiveMessagesFromClient(void* _rcv_thread_arg);
 void* ReceiveFromMaster(void* _S);
-void* ReceiveFromServersAndMisc(void* _S);
+void* ReceiveFromServersAndClients(void* _S);
 void* AcceptConnections(void* _S);
 void* AntiEntropyP1(void* _S);
 class Server {
@@ -29,7 +28,7 @@ public:
     void ConnectToAllServers(char** argv);
     bool ConnectToMaster();
 
-    void ReceiveFromServersAndMiscMode();
+    void ReceiveFromServersAndClientsMode();
     void SendRetiringMsgToServer(int);
 
     void SendMessageToServer(const string&, const string &);
@@ -53,9 +52,9 @@ public:
     void InitialSetup(pthread_t&, pthread_t&, pthread_t&, pthread_t&);
     void HandleInitialServerHandshake(int port, int fd, const std::vector<string>& token);
 
-    void RemoveFromMiscFd(int port);
+    void RemoveFromMiscFd(int fd);
     std::map<string, int> GetServerFdCopy();
-    std::unordered_map<int, int> GetMiscFdCopy();
+    std::unordered_set<int> GetMiscFdCopy();
     void CreateFdSet(fd_set & fromset,
                      vector<int>& fds,
                      int& fd_max);
@@ -76,7 +75,6 @@ public:
     int get_master_fd();
     int get_server_fd(const string&);
     string get_server_name(int);
-    int get_misc_fd(int port);
     bool get_retiring();
     void set_retiring();
     void set_name(const string & my_name);
@@ -85,7 +83,7 @@ public:
     void set_server_name(int, const string&);
     void set_master_fd(int);
     void set_my_listen_port(int port);
-    void set_misc_fd(int port, int fd);
+    void set_misc_fd(int fd);
 
 private:
     int pid_;// server's ID. DONT use this for server_listen_port/server_fd
@@ -102,7 +100,7 @@ private:
     std::unordered_map<int, string> server_name_;
     std::map<string, int> server_fd_;
     std::unordered_map<int, int> client_fd_; // hash of fd to port
-    std::unordered_map<int, int> misc_fd_; // hash of port to fd for <port, fd> tuples whose origin is not known yet
+    std::unordered_set<int> misc_fd_; // set of fds whose origin is not known yet
 
     std::unordered_map<string, int> vclock_;
     int max_csn_;

@@ -102,11 +102,11 @@ int GetPeerPortFromFd(int fd) {
 }
 
 unordered_map<int, int> StringToUnorderedMap(string str) {
-    // Port,Ts;Port,Ts;Port,ts
+    // Port,Ts;Port,Ts;Port,ts (delim=kName=!)
     unordered_map<int, int> ans;
     std::vector<string> tuple = split(str, kSemiColon[0]);
     for (const auto t : tuple) {
-        std::vector<string> entry = split(t, kComma[0]);
+        std::vector<string> entry = split(t, kName[0]);
         D(assert(entry.size() == 2);)
         ans[stoi(entry[0])] = stoi(entry[1]);
     }
@@ -114,19 +114,20 @@ unordered_map<int, int> StringToUnorderedMap(string str) {
 }
 
  string UnorderedMapToString(unordered_map<int, int>& clock) {
-    // Port,Ts;Port,Ts;Port,ts
+    // Port,Ts;Port,Ts;Port,ts (delim=kName=!)
     string msg;
     for(auto &s: clock)
     {
-        msg+=to_string(s.first)+kComma;
+        msg+=to_string(s.first)+kName;
         msg+=to_string(s.second)+kSemiColon;
     }
+    msg+=kInternalDelim;
     return msg;
 }
 
 string WriteToString(IdTuple i, Command c){
     string m;
-    m+=i.as_string()+kInternalWriteDelim;
+    m+=i.as_string();
     m+=c.as_string();
     return m;
 }
@@ -136,11 +137,10 @@ string ClockToString(unordered_map<string, int> vc){
     bool first= false;
     for(auto it=vc.begin(); it!=vc.end(); it++)
     {
-        if(it!=vc.begin())
-            m+=kInternalListDelim;
         m+=it->first;
         m+=kInternalMapDelim;
         m+=to_string(it->second);
+        m+=kInternalListDelim;
     }
     return m;
 }

@@ -19,6 +19,8 @@ public:
 	int get_csn() const;
 	int get_accept_ts() const;
 	string get_sname() const;
+    
+    void set_csn(int csn);
 private:
 	int csn_;
 	string s_name_;

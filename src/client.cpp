@@ -106,11 +106,11 @@ void Client::WaitForDone(const int fd) {
     bool done = false;
     while (!done) { // connection with server has timeout
         if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-            // cout << errno << strerror(errno) << endl;
             // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+            done = true;
         }
         else {
             done = true;
@@ -240,6 +240,7 @@ unordered_map<int, int> Client::GetServerVectorClock(int fd) {
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+            done = true;
         }
         else {
             done = true;
@@ -274,6 +275,7 @@ void Client::GetWriteID(int fd) {
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+            done = true;
         }
         else {
             done = true;
@@ -282,12 +284,12 @@ void Client::GetWriteID(int fd) {
             for (const auto &msg : message) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kWriteID) {
-                    //WRITEID-Port,Ts
+                    //WRITEID-Port,Ts (delim=kName=!)
                     D(assert(token.size() == 2);)
 
-                    std::vector<string> entry = split(string(token[1]), kInternalDelim[0]);
+                    std::vector<string> entry = split(string(token[1]), kName[0]);
 
-                    D(assert(token.size() == 2));
+                    D(assert(entry.size() == 2));
                     int port = stoi(entry[0]);
                     int timestamp = stoi(entry[1]);
                     D(cout << "C" << get_pid() << " : WRITEID received: " << token[1] << endl;)
@@ -314,6 +316,7 @@ string Client::GetResultAndRelWrites(int fd) {
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+            count = 2;
         }
         else {
             buf[num_bytes] = '\0';
@@ -321,7 +324,7 @@ string Client::GetResultAndRelWrites(int fd) {
             for (const auto &msg : message) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kUrl) {
-                    //READRESULT-url
+                    //URL-url
                     D(assert(token.size() == 2));
                     D(cout << "C" << get_pid() << " : URL received: " << token[1] << endl;)
                     url = token[1];
@@ -349,10 +352,10 @@ void Client::HandleWriteRequest(string type, string song_name, string url) {
     if (type == kPut)
         message = kPut + kInternalDelim +
                   song_name + kInternalDelim +
-                  url + kMessageDelim;
+                  url + kInternalDelim + kMessageDelim;
     else if (type == kDelete)
         message = kDelete + kInternalDelim +
-                  song_name + kMessageDelim;
+                  song_name + kInternalDelim + kMessageDelim;
 
     for (auto server_port : connected_servers_) {
         unordered_map<int, int> server_vc =
@@ -374,17 +377,17 @@ void Client::HandleWriteRequest(string type, string song_name, string url) {
  */
 string Client::HandleReadRequest(string song_name) {
     string message = kGet + kInternalDelim +
-                     song_name + kMessageDelim;
+                     song_name + kInternalDelim + kMessageDelim;
 
     for (auto server_port : connected_servers_) {
         unordered_map<int, int> server_vc =
-            GetServerVectorClock(server_port);
+            GetServerVectorClock(get_server_fd(server_port));
         if (CheckSessionGuaranteesReads(server_vc)) {
             SendMessageToServer(message, get_server_fd(server_port));
             return kUrl + kInternalDelim +
-                   GetResultAndRelWrites(server_port) + kMessageDelim;
+                   GetResultAndRelWrites(get_server_fd(server_port)) + kInternalDelim + kMessageDelim;
         } else {
-            return kUrl + kInternalDelim + kErrDep + kMessageDelim;
+            return kUrl + kInternalDelim + kErrDep + kInternalDelim + kMessageDelim;
         }
     }
     return "";
@@ -403,7 +406,6 @@ void* ReceiveFromMaster(void* _C) {
             D(cout << "C" << C->get_pid() << " : Connection closed by M" << endl;)
         } else {
             buf[num_bytes] = '\0';
-
             // extract multiple messages from the received buf
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
@@ -413,7 +415,7 @@ void* ReceiveFromMaster(void* _C) {
                     D(assert(token.size() == 3));
                     C->HandleWriteRequest(kPut, token[1], token[2]);
                     C->SendDoneToMaster();
-                } if (token[0] == kDelete) {
+                } else if (token[0] == kDelete) {
                     //DELETE-SONG_NAME
                     D(assert(token.size() == 2));
                     C->HandleWriteRequest(kDelete, token[1]);
@@ -439,7 +441,7 @@ void Client::ConstructIAmMessage(const string & type,
                                  string & message) {
     message = type + kInternalDelim +
               process_type + kInternalDelim +
-              to_string(get_pid()) + kMessageDelim;
+              to_string(get_pid()) + kInternalDelim + kMessageDelim;
 }
 
 /**

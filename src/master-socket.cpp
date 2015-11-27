@@ -95,6 +95,8 @@ void* AcceptConnections(void* _M) {
         exit(1);
     }
 
+    M->SetCloseExecFlag(sockfd);
+
     if (listen(sockfd, kBacklog) == -1) {
         perror("listen ERROR");
         exit(1);
@@ -115,6 +117,7 @@ void* AcceptConnections(void* _M) {
             perror("accept ERROR");
             continue;
         }
+        M->SetCloseExecFlag(new_fd);
         // int incoming_port = ntohs(return_port_no((struct sockaddr *)&their_addr));
         M->WaitForPortMessage(new_fd);
     }

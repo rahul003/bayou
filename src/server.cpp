@@ -42,6 +42,7 @@ Server::Server(char** argv)
     }
 
     max_csn_=0;
+    retiring_ = false;
 
 }
 
@@ -65,15 +66,6 @@ int Server::get_server_fd(const string& name) {
     if (server_fd_.find(name) != server_fd_.end())
         fd = server_fd_[name];
     pthread_mutex_unlock(&server_lock);
-    return fd;
-}
-
-int Server::get_misc_fd(int port) {
-    int fd = -1;
-    pthread_mutex_lock(&misc_fd_lock);
-    if (misc_fd_.find(port) != misc_fd_.end())
-        fd = misc_fd_[port];
-    pthread_mutex_unlock(&misc_fd_lock);
     return fd;
 }
 
@@ -108,9 +100,9 @@ void Server::set_name(const string& my_name) {
     name_ = my_name;
 }
 
-void Server::set_misc_fd(int port, int fd) {
+void Server::set_misc_fd(int fd) {
     pthread_mutex_lock(&misc_fd_lock);
-    misc_fd_[port] = fd;
+    misc_fd_.insert(fd);
     pthread_mutex_unlock(&misc_fd_lock);
 }
 
@@ -145,16 +137,16 @@ std::map<string, int> Server::GetServerFdCopy() {
     return server_fd_copy;
 }
 
-std::unordered_map<int, int> Server::GetMiscFdCopy() {
+std::unordered_set<int> Server::GetMiscFdCopy() {
     pthread_mutex_lock(&misc_fd_lock);
-    std::unordered_map<int, int> misc_fd_copy(misc_fd_);
+    std::unordered_set<int> misc_fd_copy(misc_fd_);
     pthread_mutex_unlock(&misc_fd_lock);
     return misc_fd_copy;
 }
 
-void Server::RemoveFromMiscFd(int port) {
+void Server::RemoveFromMiscFd(int fd) {
     pthread_mutex_lock(&misc_fd_lock);
-    misc_fd_.erase(port);
+    misc_fd_.erase(fd);
     pthread_mutex_unlock(&misc_fd_lock);
 }
 
@@ -179,7 +171,7 @@ void* ReceiveFromMaster(void* _S) {
                 if (token[0] == kRetireServer) {
                     S->set_retiring();
                     string send_to = S->GetServerForRetireMessage();
-                    string msg = kAntiEntropyP1 + kMessageDelim;
+                    string msg = kAntiEntropyP1 + kInternalDelim + kMessageDelim;
                     S->SendMessageToServer(send_to,msg);
                 } else {    //other messages
                     D(cout << "S" << S->get_pid()
@@ -194,13 +186,14 @@ void* ReceiveFromMaster(void* _S) {
 
 void* AntiEntropyP1(void* _S) {
     Server* S = (Server*)_S;
-    string msg = kAntiEntropyP1 + kMessageDelim;
-    string cur_server;
+    string msg = kAntiEntropyP1 + kInternalDelim + kMessageDelim;
+    string cur_server = "";
     while(true)
     {
         usleep(kAntiEntropyInterval);
         cur_server = S->GetNextServer(cur_server);
-        S->SendMessageToServer(cur_server,msg);
+        if(cur_server != "")
+            S->SendMessageToServer(cur_server,msg);
     }
     return NULL;
 }
@@ -215,12 +208,14 @@ string Server::GetServerForRetireMessage(){
 }
 
 string Server::GetNextServer(string last){
-    string rval;
+    string rval = "";
     pthread_mutex_lock(&server_lock);
-    auto it = server_fd_.upper_bound(last);
-    if(it==server_fd_.end())
-        it = server_fd_.begin();
-    rval = it->first;
+    if(!server_fd_.empty()) {
+        auto it = server_fd_.upper_bound(last);
+        if(it==server_fd_.end())
+            it = server_fd_.begin();
+        rval = it->first;
+    }
     pthread_mutex_unlock(&server_lock);
     return rval;
 }
@@ -236,22 +231,22 @@ void Server::CreateFdSet(fd_set& fromset,
     fds.clear();
 
     // client fds
-    // for (auto it = client_fd_.begin(); it != client_fd_.end(); ) {
-    //     fd_temp = it->first;
-    //     if (fd_temp == -1) {
-    //         continue;
-    //     }
-    //     int rv = recv(fd_temp, &buf, 1, MSG_DONTWAIT | MSG_PEEK);
-    //     if (rv == 0) {
-    //         close(fd_temp);
-    //         it = client_fd_.erase(it);
-    //     } else {
-    //         FD_SET(fd_temp, &fromset);
-    //         fd_max = max(fd_max, fd_temp);
-    //         fds.push_back(fd_temp);
-    //         it++;
-    //     }
-    // }
+    for (auto it = client_fd_.begin(); it != client_fd_.end(); ) {
+        fd_temp = it->second;
+        if (fd_temp == -1) {
+            continue;
+        }
+        int rv = recv(fd_temp, &buf, 1, MSG_DONTWAIT | MSG_PEEK);
+        if (rv == 0) {
+            close(fd_temp);
+            it = client_fd_.erase(it);
+        } else {
+            FD_SET(fd_temp, &fromset);
+            fd_max = max(fd_max, fd_temp);
+            fds.push_back(fd_temp);
+            it++;
+        }
+    }
 
     // server fds
     map<string, int> server_fd_copy = GetServerFdCopy();
@@ -280,17 +275,17 @@ void Server::CreateFdSet(fd_set& fromset,
     }
 
     // misc fds
-    unordered_map<int, int> misc_fd_copy = GetMiscFdCopy();
+    unordered_set<int> misc_fd_copy = GetMiscFdCopy();
     for (auto it = misc_fd_copy.begin(); it != misc_fd_copy.end(); ) {
-        fd_temp = it->second;
+        fd_temp = *(it);
         if (fd_temp == -1) {
             continue;
         }
         int rv = recv(fd_temp, &buf, 1, MSG_DONTWAIT | MSG_PEEK);
         if (rv == 0) {
             D(cout << "S" << get_pid()
-              << " : ERROR Unexpected peek error in misc fd for tuple <"
-              << it->first << "," << it->second << ">" << endl;)
+              << " : ERROR Unexpected peek error in misc fd="
+              << *it << ">" << endl;)
             close(fd_temp);
             it++;
             // TODO: shoudl I erase it?
@@ -305,7 +300,7 @@ void Server::CreateFdSet(fd_set& fromset,
     }
 }
 
-void Server::ReceiveFromServersAndMiscMode()
+void Server::ReceiveFromServersAndClientsMode()
 {
     char buf[kMaxDataSize];
     int num_bytes;
@@ -358,14 +353,14 @@ void Server::ReceiveFromServersAndMiscMode()
                                 //IAM-NEWSERVER
                                 D(assert(token.size() >= 2);)
                                 
-                                int port = GetPortFromFd(fds[i]);
+                                int port = GetPeerPortFromFd(fds[i]);
                                 if (token[1] == kClient) {
                                     set_client_fd(port, fds[i]);
-                                    RemoveFromMiscFd(port);
+                                    RemoveFromMiscFd(fds[i]);
                                     SendDoneToClient(fds[i]);
                                 } else if (token[1] == kServer || token[1] == kNewServer) {
                                     HandleInitialServerHandshake(port, fds[i], token);
-                                    RemoveFromMiscFd(port);
+                                    RemoveFromMiscFd(fds[i]);
                                 }
                             } else if (token[0] == kYouAre) {
                                 //YOUARE-MY_NAME-IAM-PEERNAME
@@ -377,7 +372,7 @@ void Server::ReceiveFromServersAndMiscMode()
                                 set_server_name(port, token[3]);
                                 set_server_fd(token[3], fds[i]);
                                 vclock_[token[3]] = 0;
-                                RemoveFromMiscFd(port);
+                                RemoveFromMiscFd(fds[i]);
                             } 
                             else if(token[0] == kAntiEntropyP1)
                             {
@@ -395,7 +390,7 @@ void Server::ReceiveFromServersAndMiscMode()
 
                                 if(get_retiring())
                                 {
-                                    SendRetiringMsgToServer(fds[i]);                                    
+                                    SendRetiringMsgToServer(fds[i]);
                                     SendDoneToMaster();
                                 }
                             }
@@ -419,13 +414,18 @@ void Server::ReceiveFromServersAndMiscMode()
                                 unordered_map<int, int> port_to_clock;
                                 CreatePortToClockMap(port_to_clock);
                                 string msg=kServerVC+kInternalDelim;
-                                msg+=UnorderedMapToString(port_to_clock)+kMessageDelim;
+                                msg+=UnorderedMapToString(port_to_clock) + kMessageDelim;
                                 SendMessageToClient(fds[i],msg);
                             }
                             else if(token[0]==kGet)
                             {
                                 string msg = kUrl+kInternalDelim;
-                                msg += database_[token[1]]+kMessageDelim;
+                                string url;
+                                if(database_.find(token[1]) == database_.end())
+                                    url = kErrKey;
+                                else
+                                    url = database_[token[1]];
+                                msg += url+kInternalDelim+kMessageDelim;
                                 SendMessageToClient(fds[i], msg);
 
                                 msg = kRelWrites+kInternalDelim;
@@ -473,7 +473,7 @@ string Server::GetRelevantWrites(string song)
     
     return UnorderedMapToString(port_to_ts);
 }
-                                
+
 void Server::CreatePortToClockMap(unordered_map<int, int>& port_to_clock)
 {
     for(auto &c: vclock_)
@@ -487,8 +487,8 @@ void Server::CreatePortToClockMap(unordered_map<int, int>& port_to_clock)
 void Server::SendWriteIdToClient(int fd)
 {
     string msg = kWriteID+kInternalDelim;
-    msg += to_string(my_listen_port_)+kInternalDelim;
-    msg += to_string(vclock_[get_name()])+kMessageDelim;
+    msg += to_string(my_listen_port_) + kName;
+    msg += to_string(vclock_[get_name()]) + kInternalDelim + kMessageDelim;
     SendMessageToClient(fd, msg);
 }
 
@@ -531,9 +531,9 @@ void Server::CommitTentativeWrites(){
     ExecuteCommandsOnDatabase(first);
 }
 
-void* ReceiveFromServersAndMisc(void* _S) {
+void* ReceiveFromServersAndClients(void* _S) {
     Server* S = (Server*)_S;
-    S->ReceiveFromServersAndMiscMode();
+    S->ReceiveFromServersAndClientsMode();
     return NULL;
 }
 
@@ -547,7 +547,7 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
         vclock_[token[2]] = 0;
 
         string message;
-        ConstructMessage(kIAm, get_name(), message);
+        ConstructMessage(kIAm, get_name() + kInternalDelim, message);
         SendMessageToServer(token[2], message);
 
     } else if (token[1] == kNewServer) {    // sending server is new. Does not have a name
@@ -559,25 +559,25 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
         // send his and my name to peer
         string you_are_msg;
         string i_am_msg;
-        ConstructMessage(kYouAre, name, you_are_msg);
-        ConstructMessage(kIAm, get_name(), i_am_msg);
+        ConstructMessage(kYouAre, name + kInternalDelim, you_are_msg);
+        ConstructMessage(kIAm, get_name() + kInternalDelim, i_am_msg);
 
         string message = you_are_msg;
         message.pop_back();
-        message = message + kInternalDelim + i_am_msg;
+        message = message + i_am_msg;
         SendMessageToServer(name, message);
     }
 }
 
 string Server::CreateName() {
-    return (get_name() + kComma + to_string(vclock_[name_]));
+    return (get_name() + kName + to_string(vclock_[name_]));
 }
 
 void Server::SendOrAskName(int fd) {
     if (!get_name().empty())
     {
         string msg;
-        ConstructIAmMessage(kIAm, kServer, get_name(), msg);
+        ConstructIAmMessage(kIAm, kServer, get_name() + kInternalDelim, msg);
         SendMessageToServerByFd(fd, msg);
     }
     else {
@@ -592,7 +592,7 @@ void Server::SendAEP1Response(int fd)
     string msg;
     msg += kAntiEntropyP1Resp + kInternalDelim;
     msg+=to_string(max_csn_) + kInternalDelim;
-    msg += ClockToString(vclock_) + kMessageDelim;
+    msg += ClockToString(vclock_) + kInternalDelim + kMessageDelim;
     SendMessageToServerByFd(fd, msg);
 }
 
@@ -623,7 +623,7 @@ void Server::ConstructAEP2Message(string& msg, const int& r_csn, unordered_map<s
         }
         it++;
     }
-    msg+=new_tent+kMessageDelim;
+    msg+=new_tent+kInternalDelim + kMessageDelim;
 }
 
 IdTuple Server::RollBack(const string& committed_writes, const string& tent_writes)
@@ -634,6 +634,7 @@ IdTuple Server::RollBack(const string& committed_writes, const string& tent_writ
     if(!committed_writes.empty()){
         writes = split(committed_writes, kComma[0]);
         parts = split(writes[0], kInternalWriteDelim[0]);
+        D(assert(parts.size() >= 5);) // 5 for delete, 6 for put
         IdTuple cur_first(stoi(parts[0]), parts[1], stoi(parts[2]));
         earliest = cur_first;
         earliest_found = true;
@@ -642,10 +643,11 @@ IdTuple Server::RollBack(const string& committed_writes, const string& tent_writ
     {
         writes = split(tent_writes, kComma[0]);
         parts = split(writes[0], kInternalWriteDelim[0]);
-        IdTuple cur_first(INT_MAX, parts[0], stoi(parts[1]));
+        D(assert(parts.size() >= 5);) // 5 for delete, 6 for put
+        IdTuple cur_first(INT_MAX, parts[1], stoi(parts[2]));
         
         earliest = cur_first;
-        earliest_found = true;        
+        earliest_found = true;
     }
     D(assert(earliest_found==true);)
 
@@ -668,31 +670,49 @@ IdTuple Server::RollBack(const string& committed_writes, const string& tent_writ
 }
 
 void Server::ExtractAEP2Message(const string& committed_writes, const string& tent_writes){
-    //AEP2-c1.n1.w1.m1-n1.w1,m1
+    //AEP2-c1.n1.w1.m1-c1,n1.w1,m1
     //AEP2-commitedwrites-tentativewrites$
     IdTuple from = RollBack(committed_writes, tent_writes);
-
+    
     vector<string> writes = split(committed_writes, kComma[0]);
     for(auto &p: writes)
     {
         vector<string> parts = split(p, kInternalWriteDelim[0]);
-        D(assert(parts.size()==6);)
+        D(assert(parts.size() >= 5);) // 5 for delete, 6 for put
         IdTuple w(INT_MAX, parts[1], stoi(parts[2]));
-        if(write_log_.find(w)!=write_log_.end())
-        {
+        
+        // check if this write already present in committed
+        IdTuple w_new(stoi(parts[0]), parts[1], stoi(parts[2]));
+        if(write_log_.find(w_new)!=write_log_.end())
+            continue;
+
+        if(write_log_.find(w)!=write_log_.end()) {
             write_log_.erase(w);
         }
         Command c(parts[3], parts[4], parts[5]);
-        IdTuple w_new(stoi(parts[0]), parts[1], stoi(parts[2]));
         write_log_[w_new] = c;
     }
     writes = split(tent_writes, kComma[0]);
     for(auto &p: writes)
     {
         vector<string> parts = split(p, kInternalWriteDelim[0]);
-        D(assert(parts.size()==5);)
-        IdTuple w(INT_MAX, parts[0], stoi(parts[1]));
-        Command c(parts[2], parts[3], parts[4]);
+        D(assert(parts.size() >= 5);) // 5 for delete, 6 for put
+        int temp_csn;
+
+        // check if this write already present in committed or tentative
+        if(vclock_[parts[1]] >=  stoi(parts[2]) ) {
+            continue;
+        }
+
+        if(am_primary_) {
+            max_csn_++;
+            temp_csn = max_csn_;
+            from.set_csn(temp_csn);
+        } else {
+            temp_csn = INT_MAX;
+        }
+        IdTuple w(temp_csn, parts[1], stoi(parts[2]));
+        Command c(parts[3], parts[4], parts[5]);
         write_log_[w] = c;
     }
 
@@ -735,10 +755,13 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
         }
         else if (type==kDelete)
         {
+            //TODO: what to write in undo log when song does not exist for deletion
             if(w.get_csn()==INT_MAX)
             {
                 undo_log_[w] = Command(kUndo, song, database_[song]);
             }
+            else
+                max_csn_ = w.get_csn();
             database_.erase(song);
         }
 
@@ -835,7 +858,7 @@ void Server::ConstructPortMessage(string & message) {
     message = kPort + kInternalDelim +
               kServer + kInternalDelim +
               to_string(get_pid()) + kInternalDelim +
-              to_string(get_my_listen_port()) + kMessageDelim;
+              to_string(get_my_listen_port()) + kInternalDelim + kMessageDelim;
 }
 
 void Server::ConstructMessage(const string & type, const string & body, string & message) {
@@ -907,7 +930,7 @@ void Server::InitialSetup(pthread_t& accept_connections_thread,
     EstablishMasterCommunication();
 
     CreateThread(ReceiveFromMaster, (void*)this, receive_from_master_thread);
-    CreateThread(ReceiveFromServersAndMisc, (void*)this, receive_from_servers_thread);
+    CreateThread(ReceiveFromServersAndClients, (void*)this, receive_from_servers_thread);
     CreateThread(AntiEntropyP1, (void*)this, anti_entropy_p1_thread);
 }
 

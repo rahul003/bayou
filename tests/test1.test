@@ -1,0 +1,12 @@
+joinServer 0
+joinClient 5 0
+joinServer 1
+put 5 song1 url1
+joinClient 6 1
+get 6 song1
+put 6 song2 url2
+get 5 song2
+get 6 song2
+delete 5 song1
+get 6 song1
+get 5 song1

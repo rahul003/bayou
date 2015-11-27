@@ -74,12 +74,12 @@ void Master::set_primary_id(const int id) {
 
 void Master::set_server_fd(const int server_id, const int fd) {
     server_fd_[server_id] = fd;
-    // SetCloseExecFlag(fd);
+    SetCloseExecFlag(fd);
 }
 
 void Master::set_client_fd(const int client_id, const int fd) {
     client_fd_[client_id] = fd;
-    // SetCloseExecFlag(fd);
+    SetCloseExecFlag(fd);
 }
 
 void Master::set_server_listen_port(const int server_id, const int port_num) {
@@ -167,7 +167,7 @@ bool Master::SpawnServer(const int server_id, bool isPrimary) {
                          environ);
     if (status == 0) {
         D(cout << "M  : Spawned S" << server_id << endl;)
-        all_pids_[server_id]=pid;
+        all_pids_[server_id] = pid;
     } else {
         D(cout << "M  : ERROR: Cannot spawn S"
           << server_id << " - " << strerror(status) << endl);
@@ -243,7 +243,7 @@ bool Master::SpawnClient(const int client_id, const int server_id) {
                          environ);
     if (status == 0) {
         D(cout << "M  : Spawned C" << client_id << endl;)
-        all_pids_[client_id]=pid;
+        all_pids_[client_id] = pid;
     } else {
         D(cout << "M  : ERROR: Cannot spawn C"
           << client_id << " - " << strerror(status) << endl);
@@ -278,6 +278,7 @@ void Master::WaitForDone(const int fd) {
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
+            done = true;
         }
         else {
             buf[num_bytes] = '\0';
@@ -311,6 +312,7 @@ void Master::WaitForPortMessage(const int fd) {
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
+            done = true;
         }
         else {
             done = true;
@@ -321,6 +323,7 @@ void Master::WaitForPortMessage(const int fd) {
                 // PORT-SERVER-ID-PORT_NUM
                 // or IAM-CLIENT-ID
                 if (token[0] == kPort) {
+                    D(assert(token.size() == 4);)
                     if (token[1] == kServer) {
                         int server_id = stoi(token[2]);
                         int port_num = stoi(token[3]);
@@ -332,6 +335,7 @@ void Master::WaitForPortMessage(const int fd) {
                           << fd << ": " << msg << endl;)
                     }
                 } else if (token[0] == kIAm) {
+                    D(assert(token.size() == 3);)
                     if (token[1] == kClient) {
                         int client_id = stoi(token[2]);
                         D(cout << "M  : IAM-CLIENT received from C" << client_id << endl;)
@@ -351,17 +355,17 @@ void Master::WaitForPortMessage(const int fd) {
 
 /**
  * receives URL from client
- * @param client_id id of client
+ * @param fd fd of client
  */
-void Master::GetUrlFromClient(const int client_id) {
+void Master::GetUrlFromClient(const int fd) {
     char buf[kMaxDataSize];
     int num_bytes;
 
-    if ((num_bytes = recv(get_client_fd(client_id), buf, kMaxDataSize - 1, 0)) == -1) {
-        D(cout << "M  : ERROR in receiving url from C" << client_id << endl;)
+    if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
+        D(cout << "M  : ERROR in receiving url from C" << endl;)
     }
     else if (num_bytes == 0) {   //connection closed
-        D(cout << "M  : ERROR Connection closed by C" << client_id << endl;)
+        D(cout << "M  : ERROR Connection closed by C" << endl;)
     }
     else {
         buf[num_bytes] = '\0';
@@ -371,10 +375,10 @@ void Master::GetUrlFromClient(const int client_id) {
             if (token[0] == kUrl) {
                 D(assert(token.size() == 2);)
                 D(cout << "M  : URL received from C"
-                  << client_id << " : " << token[1] << endl;)
+                  << " : " << token[1] << endl;)
             } else {
                 D(cout << "M  : Unexpected message received from C"
-                  << client_id << ": " << msg << endl;)
+                  << ": " << msg << endl;)
             }
         }
     }
@@ -391,7 +395,7 @@ void Master::SendPutToClient(int client_id,
                              const string& url) {
     string message = kPut + kInternalDelim +
                      song_name + kInternalDelim +
-                     url + kMessageDelim;
+                     url + kInternalDelim + kMessageDelim;
     SendMessageToClient(client_id, message);
     WaitForDone(get_client_fd(client_id));
 }
@@ -404,7 +408,7 @@ void Master::SendPutToClient(int client_id,
 void Master::SendDeleteToClient(int client_id,
                                 const string& song_name) {
     string message = kDelete + kInternalDelim +
-                     song_name + kMessageDelim;
+                     song_name + kInternalDelim + kMessageDelim;
     SendMessageToClient(client_id, message);
     WaitForDone(get_client_fd(client_id));
 }
@@ -417,7 +421,7 @@ void Master::SendDeleteToClient(int client_id,
 void Master::SendGetToClient(int client_id,
                              const string& song_name) {
     string message = kGet + kInternalDelim +
-                     song_name + kMessageDelim;
+                     song_name + kInternalDelim + kMessageDelim;
     SendMessageToClient(client_id, message);
     GetUrlFromClient(get_client_fd(client_id));
 }
@@ -504,11 +508,11 @@ void Master::ReadTest() {
                 SpawnServer(id, true);
                 set_primary_id(id);
             }
-        } 
-        else if(keyword==kRetireServer)
+        }
+        else if (keyword == kRetireServer)
         {
             int id;
-            iss>>id;
+            iss >> id;
             SendRetireMessage(id);
             WaitForDone(get_server_fd(id));
             CrashServer(id);
@@ -522,6 +526,16 @@ void Master::ReadTest() {
             string song_name, url;
             iss >> cid >> song_name >> url;
             SendPutToClient(cid, song_name, url);
+        } else if (keyword == kGet) {
+            int cid;
+            string song_name;
+            iss >> cid >> song_name;
+            SendGetToClient(cid, song_name);
+        } else if (keyword == kDelete) {
+            int cid;
+            string song_name;
+            iss >> cid >> song_name;
+            SendDeleteToClient(cid, song_name);
         }
     }
 }
@@ -535,7 +549,7 @@ int main() {
 
     M.ReadTest();
 
-    usleep(2000 * 1000);
+    usleep(3000 * 1000);
     D(cout << "M  : GOODBYE. Killing everyone..." << endl;)
     M.KillAllProcesses();
     return 0;

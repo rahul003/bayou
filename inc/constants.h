@@ -24,6 +24,7 @@ const string kInternalListDelim = "`";
 const string kInternalWriteDelim = "^";
 const string kComma = ",";
 const string kSemiColon = ";";
+const string kName = "!";
 
 const string kDone = "DONE";
 const string kPort = "PORT";

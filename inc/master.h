@@ -28,7 +28,7 @@ public:
     void SendPutToClient(int client_id,
                          const string& song_name,
                          const string& url);
-    void GetUrlFromClient(const int client_id);
+    void GetUrlFromClient(const int fd);
     void SendGetToClient(int client_id,
                          const string& song_name);
     void SendDeleteToClient(int client_id,
