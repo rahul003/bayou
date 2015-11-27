@@ -107,7 +107,7 @@ unordered_map<int, int> StringToUnorderedMap(string str) {
     std::vector<string> tuple = split(str, kSemiColon[0]);
     for (const auto t : tuple) {
         std::vector<string> entry = split(t, kComma[0]);
-        assert(entry.size() == 2);
+        D(assert(entry.size() == 2);)
         ans[stoi(entry[0])] = stoi(entry[1]);
     }
     return ans;
@@ -152,7 +152,7 @@ void StringToClock(string m, unordered_map<string, int>& rval){
     for(auto &p: parts)
     {
         vector<string> tokens = split(p, kInternalMapDelim[0]);
-        assert(tokens.size()==2);
+        D(assert(tokens.size()==2);)
         rval[tokens[0]]=stoi(tokens[1]);
     }
 }
