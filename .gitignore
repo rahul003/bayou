@@ -4,3 +4,4 @@ master
 server
 client
 tests/mytest.test
+src/test.cpp

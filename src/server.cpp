@@ -578,6 +578,11 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
             undo_log_[w] = Command(kUndo, song, database_[song]);
             database_.erase(song);
         }
+
+        //updating vector clock if behind. it will be behind for new writes
+        if(vclock_[w.get_sname()]<w.get_accept_ts())
+            vclock_[w.get_sname()] = w.get_accept_ts();
+
         it++;
     }
     
