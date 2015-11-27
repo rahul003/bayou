@@ -39,7 +39,7 @@ const string kAntiEntropyP2 = "AEP2";
 const string kRetiring = "RETIRING";
 const string kAck = "ACK";
 const string kWasPrim = "WASPRIM";
-
+const string kMyLog = "MYLOG";
 const string kServer = "SERVER";
 const string kClient = "CLIENT";
 const string kServerVC = "SERVERVC";
@@ -68,7 +68,7 @@ const string kCreate = "create";
 const string kRetire = "retire";
 const string kPrimRetire = "PrimRetire";
 
-
+const string kPrintLog = "printLog";
 const string kStabilize = "stabilize";
 const string kPause = "pause";
 const string kStart = "start";

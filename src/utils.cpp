@@ -126,7 +126,7 @@ unordered_map<int, int> StringToUnorderedMap(string str) {
 
 string WriteToString(IdTuple i, Command c){
     string m;
-    m+=i.as_string()+kInternalWriteDelim;
+    m+=i.as_string();
     m+=c.as_string();
     return m;
 }
@@ -136,11 +136,10 @@ string ClockToString(unordered_map<string, int> vc){
     bool first= false;
     for(auto it=vc.begin(); it!=vc.end(); it++)
     {
-        if(it!=vc.begin())
-            m+=kInternalListDelim;
         m+=it->first;
         m+=kInternalMapDelim;
         m+=to_string(it->second);
+        m+=kInternalListDelim;
     }
     return m;
 }

@@ -27,6 +27,7 @@ using namespace std;
 
 pthread_mutex_t server_lock;
 pthread_mutex_t misc_fd_lock;
+pthread_mutex_t pause_lock;
 pthread_mutex_t retiring_lock;
 
 Server::Server(char** argv)
@@ -40,13 +41,20 @@ Server::Server(char** argv)
         set_name(kFirst);
         vclock_[name_] = 0;
     }
-
+    pause_ = false;
     max_csn_=0;
 
 }
 
 int Server::get_pid() {
     return pid_;
+}
+bool Server::get_pause() {
+    bool copy;
+    pthread_mutex_lock(&pause_lock);
+    copy = pause_;
+    pthread_mutex_unlock(&pause_lock);
+    return copy;
 }
 string Server::get_name() {
     return name_;
@@ -103,7 +111,12 @@ void Server::set_retiring(RetireStatus s) {
     retiring_ = s;
     pthread_mutex_unlock(&retiring_lock);
 }
-
+void Server::set_pause(bool t)
+{
+    pthread_mutex_lock(&pause_lock);
+    pause_ = t;
+    pthread_mutex_unlock(&pause_lock);   
+}
 void Server::set_name(const string& my_name) {
     name_ = my_name;
 }
@@ -184,41 +197,6 @@ void Server::AddRetireWrite()
     //dont execute as will change vector clock which casues issues with antientropy
 }
 
-void* ReceiveFromMaster(void* _S) {
-    Server* S = (Server*)_S;
-    char buf[kMaxDataSize];
-    int num_bytes;
-    // D(cout << "S" << S->get_pid() << " : Receiving from M" << endl;)
-    while (true) {  // always listen to messages from the master
-        num_bytes = recv(S->get_master_fd(), buf, kMaxDataSize - 1, 0);
-        if (num_bytes == -1) {
-            D(cout << "S" << S->get_pid() << " : ERROR in receiving message from M" << endl;)
-        } else if (num_bytes == 0) {    // connection closed by master
-            D(cout << "S" << S->get_pid() << " : Connection closed by M" << endl;)
-        } else {
-            buf[num_bytes] = '\0';
-
-            // extract multiple messages from the received buf
-            std::vector<string> message = split(string(buf), kMessageDelim[0]);
-            for (const auto &msg : message) {
-                std::vector<string> token = split(string(msg), kInternalDelim[0]);
-                if (token[0] == kRetireServer) {
-                    S->set_retiring(SET);
-                    S->CloseClientConnections();
-                    S->AddRetireWrite();
-                    string send_to = S->GetServerForRetireMessage();
-                    string msg = kAntiEntropyP1 + kMessageDelim;
-                    S->SendMessageToServer(send_to,msg);
-                } else {    //other messages
-                    D(cout << "S" << S->get_pid()
-                      << " : ERROR Unexpected message received: " << msg << endl;)
-                }
-            }
-        }
-    }
-    return NULL;
-}
-
 
 void* AntiEntropyP1(void* _S) {
     Server* S = (Server*)_S;
@@ -227,11 +205,45 @@ void* AntiEntropyP1(void* _S) {
     while(true)
     {
         usleep(kAntiEntropyInterval);
-        cur_server = S->GetNextServer(cur_server);
-        S->SendMessageToServer(cur_server,msg);
+        if(!S->get_pause())
+        {
+            cur_server = S->GetNextServer(cur_server);
+            S->SendMessageToServer(cur_server,msg);
+        }
     }
     return NULL;
 }
+string Server::GetWriteLogAsString(){
+    string rval;
+    for(auto &entry: write_log_)
+    {
+        IdTuple w = entry.first;
+        Command c = entry.second;
+
+        if(c.get_type()==kPut)
+        {
+            rval+="PUT:(";
+            rval+=c.get_song()+","+c.get_url()+"):";
+            if(w.get_csn()==INT_MAX)
+                rval+="FALSE";
+            else
+                rval+="TRUE";
+            rval+=kInternalListDelim;
+        }
+        else if(c.get_type()==kDelete)
+        {
+            rval+="DELETE:(";
+            rval+=c.get_song()+"):";
+            if(w.get_csn()==INT_MAX)
+                rval+="FALSE";
+            else
+                rval+="TRUE";
+            rval+=kInternalListDelim;   
+        }
+    }
+    return rval;
+}
+
 string Server::GetServerForRetireMessage(){
     string rval;
 
@@ -331,9 +343,15 @@ void Server::CreateFdSet(fd_set& fromset,
             it++;
         }
     }
+
+    //master_fd
+    fd_temp = get_master_fd();
+    FD_SET(fd_temp,&fromset);
+    fd_max = max(fd_max,fd_temp);
+    fds.push_back(fd_temp);
 }
 
-void Server::ReceiveFromServersAndMiscMode()
+void Server::ReceiveFromAllMode()
 {
     char buf[kMaxDataSize];
     int num_bytes;
@@ -403,7 +421,7 @@ void Server::ReceiveFromServersAndMiscMode()
                                 set_name(token[1]);
                                 std::vector<string> v = split(token[1],kName[0]);
                                 vclock_[name_]=stoi(v.back());
-                                //first wriote this server accepts will be with tk+1
+                                //first write this server accepts will be with tk+1
                                 set_server_name(port, token[3]);
                                 set_server_fd(token[3], fds[i]);
                                 vclock_[token[3]] = 0;
@@ -426,12 +444,7 @@ void Server::ReceiveFromServersAndMiscMode()
                                 }
                                 vclock_.erase(get_server_name(fds[i]));
                                 string msg = kAck + kInternalDelim + kMessageDelim;
-                                SendMessageToServerByFd(fds[i],msg);
-                                //removed below lines, coz lets close when the server is actually killed by master
-                                // string name = get_server_name(fds[i]);
-                                // close(fds[i]);
-                                // server_fd_.erase(name);
-                                //not erasing port t- name mapping. coz it requires searching. fuck it
+                                SendMessageToServerByFd(fds[i],msg);                                
                             }
                             else if(token[0]==kAntiEntropyP2)
                             {
@@ -450,11 +463,11 @@ void Server::ReceiveFromServersAndMiscMode()
                             else if(token[0]==kGet)
                             {
                                 string msg = kUrl+kInternalDelim;
-                                msg += database_[token[1]]+kMessageDelim;
+                                msg += database_[token[1]]+kInternalDelim + kMessageDelim;
                                 SendMessageToClient(fds[i], msg);
 
                                 msg = kRelWrites+kInternalDelim;
-                                msg += GetRelevantWrites(token[1]) + kMessageDelim;
+                                msg += GetRelevantWrites(token[1]) + kInternalDelim + kMessageDelim;
                                 SendMessageToClient(fds[i], msg);
                             }
                             else if(token[0] == kPut)
@@ -468,6 +481,30 @@ void Server::ReceiveFromServersAndMiscMode()
                                 D(assert(token.size()==2);)
                                 AddWrite(token[0], token[1], "");
                                 SendWriteIdToClient(fds[i]);
+                            }
+                            //originally in master 
+                            else if (token[0] == kRetireServer) {
+                                set_retiring(SET);
+                                CloseClientConnections();
+                                AddRetireWrite();
+                                string send_to = GetServerForRetireMessage();
+                                string msg = kAntiEntropyP1 + kInternalDelim + kMessageDelim;
+                                SendMessageToServer(send_to,msg);
+                            } 
+                            else if(token[0]==kPrintLog){
+                                string msg = kMyLog + kInternalDelim;
+                                msg += GetWriteLogAsString()+kInternalDelim + kMessageDelim;
+                                SendMessageToMaster(msg);
+                            }
+                            else if(token[0] == kPause)
+                            {
+                                set_pause(true);
+                                SendDoneToMaster();
+                            }
+                            else if(token[0] == kStart)
+                            {
+                                set_pause(false);
+                                SendDoneToMaster();
                             }
                             else {    //other messages
                                 D(cout << "S" << get_pid()
@@ -582,9 +619,9 @@ void Server::CommitTentativeWrites(){
     ExecuteCommandsOnDatabase(first);
 }
 
-void* ReceiveFromServersAndMisc(void* _S) {
+void* ReceiveFromAll(void* _S) {
     Server* S = (Server*)_S;
-    S->ReceiveFromServersAndMiscMode();
+    S->ReceiveFromAllMode();
     return NULL;
 }
 
@@ -819,7 +856,7 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
             //actually i think it will first see the creation write definitely
             vclock_[w.get_sname()] = w.get_accept_ts();
         }
-        else if(s_clock<INT_MAX))
+        else if(s_clock<INT_MAX)
         {   
             if(vclock_[w.get_sname()]<w.get_accept_ts())
                 vclock_[w.get_sname()] = w.get_accept_ts();            
@@ -835,7 +872,7 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
     
 }
 
-int CompleteV(string s)
+int Server::CompleteV(string s)
 {
     if(vclock_.find(s)!=vclock_.end())
     {
@@ -849,7 +886,7 @@ int CompleteV(string s)
     D(assert(sub_name.size()>=2);)
     string last = sub_name[sub_name.size()-1];
     string second_last = sub_name[sub_name.size()-2];
-    if(CompleteV(last)>=second_last)
+    if(CompleteV(last)>=stoi(second_last))
         return INT_MAX;
     else
         return INT_MIN;
@@ -993,8 +1030,7 @@ void Server::EstablishMasterCommunication() {
  * @param receive_from_servers_thread thread for receiving from servers
  */
 void Server::InitialSetup(pthread_t& accept_connections_thread,
-                          pthread_t& receive_from_master_thread,
-                          pthread_t& receive_from_servers_thread,
+                          pthread_t& receive_from_all_thread,
                           pthread_t& anti_entropy_p1_thread) {
     InitializeLocks();
     CreateThread(AcceptConnections, (void*)this, accept_connections_thread);
@@ -1004,8 +1040,7 @@ void Server::InitialSetup(pthread_t& accept_connections_thread,
     }
     EstablishMasterCommunication();
 
-    CreateThread(ReceiveFromMaster, (void*)this, receive_from_master_thread);
-    CreateThread(ReceiveFromServersAndMisc, (void*)this, receive_from_servers_thread);
+    CreateThread(ReceiveFromAll, (void*)this, receive_from_all_thread);
     CreateThread(AntiEntropyP1, (void*)this, anti_entropy_p1_thread);
 }
 
@@ -1025,19 +1060,22 @@ void Server::InitializeLocks() {
         D(cout << "S" << get_pid() << " : Mutex init failed" << endl;)
         pthread_exit(NULL);
     }
+    if (pthread_mutex_init(&pause_lock, NULL) != 0) {
+        D(cout << "S" << get_pid() << " : Mutex init failed" << endl;)
+        pthread_exit(NULL);
+    }
+
 }
 
 int main(int argc, char *argv[]) {
     signal(SIGPIPE, SIG_IGN);
     pthread_t accept_connections_thread;
-    pthread_t receive_from_master_thread;
-    pthread_t receive_from_servers_thread;
+    pthread_t receive_from_all_thread;
     pthread_t anti_entropy_p1_thread;
 
     Server S(argv);
     S.InitialSetup(accept_connections_thread,
-                   receive_from_master_thread,
-                   receive_from_servers_thread,
+                   receive_from_all_thread,
                    anti_entropy_p1_thread);
 
     S.ConnectToAllServers(argv);
@@ -1046,7 +1084,6 @@ int main(int argc, char *argv[]) {
     void* status;
     pthread_join(anti_entropy_p1_thread, &status);   
     pthread_join(accept_connections_thread, &status);
-    pthread_join(receive_from_master_thread, &status);
-    pthread_join(receive_from_servers_thread, &status);
+    pthread_join(receive_from_all_thread, &status);
     return 0;
 }

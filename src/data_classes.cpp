@@ -58,7 +58,7 @@ string IdTuple::as_string(){
     string m;
     m+=to_string(csn_)+kInternalWriteDelim;
     m+=s_name_+kInternalWriteDelim;
-    m+=to_string(accept_ts_);
+    m+=to_string(accept_ts_)+kInternalWriteDelim;
     return m;
 }
 
@@ -85,7 +85,7 @@ string Command::as_string(){
     string m;
     m+=type_+kInternalWriteDelim;
     m+=song_+kInternalWriteDelim;
-    m+=url_;
+    m+=url_+kInternalWriteDelim;
     return m;
 }
 string Command::get_type(){

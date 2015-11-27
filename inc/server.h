@@ -15,9 +15,7 @@ typedef enum {
     UNSET, SET, DONE
 } RetireStatus;
 
-void* ReceiveMessagesFromClient(void* _rcv_thread_arg);
-void* ReceiveFromMaster(void* _S);
-void* ReceiveFromServersAndMisc(void* _S);
+void* ReceiveFromAll(void* _S);
 void* AcceptConnections(void* _S);
 void* AntiEntropyP1(void* _S);
 class Server {
@@ -32,8 +30,8 @@ public:
     bool ConnectToServer(const int port);
     void ConnectToAllServers(char** argv);
     bool ConnectToMaster();
-
-    void ReceiveFromServersAndMiscMode();
+    int CompleteV(string);
+    void ReceiveFromAllMode();
     void SendRetiringMsgToServer(int);
 
     void SendMessageToServer(const string&, const string &);
@@ -46,7 +44,7 @@ public:
 
     void AddWrite(string type, string song, string url);
     void SendAntiEntropyP2(vector<string>& token, int fd);
-
+    string GetWriteLogAsString();
 
     string GetNextServer(string);
     string GetServerForRetireMessage();
@@ -55,7 +53,7 @@ public:
 
     void InitializeLocks();
     void EstablishMasterCommunication();
-    void InitialSetup(pthread_t&, pthread_t&, pthread_t&, pthread_t&);
+    void InitialSetup(pthread_t&, pthread_t&, pthread_t&);
     void HandleInitialServerHandshake(int port, int fd, const std::vector<string>& token);
 
     void RemoveFromMiscFd(int port);
@@ -79,6 +77,7 @@ public:
 
     int get_pid();
     string get_name();
+    bool get_pause();
     int get_my_listen_port();
     int get_master_listen_port();
     int get_master_fd();
@@ -87,6 +86,7 @@ public:
     int get_misc_fd(int port);
     RetireStatus get_retiring();
     void set_retiring(RetireStatus);
+    void set_pause(bool);
     void set_name(const string & my_name);
     void set_server_fd(const string&, int);
     void set_client_fd(int port, int fd);
@@ -100,7 +100,7 @@ private:
     string name_;
     bool am_primary_;
     RetireStatus retiring_;
-
+    bool pause_;
     int master_listen_port_;
     int my_listen_port_;
 
