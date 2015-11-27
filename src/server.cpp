@@ -37,7 +37,7 @@ Server::Server(char** argv)
     my_listen_port_ = -1;
 
     if (am_primary_) {
-        set_name(kPrimary);
+        set_name(kFirst);
         vclock_[name_] = 0;
     }
 
@@ -812,12 +812,47 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
         }
         
         //updating vector clock if behind. it will be behind for new writes
-        if(vclock_[w.get_sname()]<w.get_accept_ts())
+        int s_clock = CompleteV(w.get_sname());
+        if(s_clock==INT_MIN)
+        {   //not seen creation write
+            //below is effectively seeing creation write.
+            //actually i think it will first see the creation write definitely
             vclock_[w.get_sname()] = w.get_accept_ts();
+        }
+        else if(s_clock<INT_MAX))
+        {   
+            if(vclock_[w.get_sname()]<w.get_accept_ts())
+                vclock_[w.get_sname()] = w.get_accept_ts();            
+        }    
+        else
+        {
+            D(cout<<"WTF. Shouldnt happen"<<endl;)
+            //retired. and i know it.
+        }
 
         it++;
     }
     
+}
+
+int CompleteV(string s)
+{
+    if(vclock_.find(s)!=vclock_.end())
+    {
+        return vclock_[s];
+    }
+    if(s==kFirst)
+    {   
+        return INT_MAX;
+    }
+    vector<string> sub_name = split(s, kName[0]);
+    D(assert(sub_name.size()>=2);)
+    string last = sub_name[sub_name.size()-1];
+    string second_last = sub_name[sub_name.size()-2];
+    if(CompleteV(last)>=second_last)
+        return INT_MAX;
+    else
+        return INT_MIN;
 }
 
 void Server::WaitForAck(int fd)
