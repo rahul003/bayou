@@ -365,9 +365,9 @@ void Server::ReceiveFromServersAndMiscMode()
                             }
                             else if(token[0]==kAntiEntropyP2)
                             {
-                                D(assert(token.size()==4);)
-                                if((!token[2].empty()) || (!token[3].empty()))
-                                    ExtractAEP2Message(token[2], token[3]);
+                                D(assert(token.size()==3);)
+                                if(!(token[1].empty() && token[2].empty()))
+                                    ExtractAEP2Message(token[1], token[2]);
                             }
                             else {    //other messages
                                 D(cout << "S" << get_pid()
@@ -391,7 +391,7 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
     // token[0] is kIAm
     if (token[1] == kServer) {  // sending server already has name
         //IAM-SERVER-SERVER_NAME
-        assert(token.size() == 3);
+        D(assert(token.size() == 3);)
         set_server_name(port, token[2]);
         set_server_fd(token[2], fd);
 
@@ -455,7 +455,7 @@ void Server::ConstructAEP2Message(string& msg, const int& r_csn, unordered_map<s
     {
         //gives first element higher than this
         auto it = write_log_.lower_bound(IdTuple(r_csn+1,"",0));
-        while(it->first.get_csn()<=max_csn_)
+        while(it!=write_log_.end() && it->first.get_csn()<=max_csn_)
         {  
             committed+=WriteToString(it->first, it->second)+kComma;
             it++;
@@ -473,6 +473,7 @@ void Server::ConstructAEP2Message(string& msg, const int& r_csn, unordered_map<s
     }
     msg+=new_tent+kMessageDelim;
 }
+
 IdTuple Server::RollBack(const string& committed_writes, const string& tent_writes)
 {
     IdTuple earliest;

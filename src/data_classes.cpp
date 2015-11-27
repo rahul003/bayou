@@ -19,11 +19,11 @@ bool IdTuple::operator<(const IdTuple &t2) const {
         return false;
     else if(this->csn_==t2.csn_)
     {
-        if(this->s_name_.length()<t2.s_name_.length())
+        if(this->s_name_<t2.s_name_)
             return true;
-        else if(this->s_name_.length() > t2.s_name_.length())
+        else if(this->s_name_ > t2.s_name_)
             return false;
-        else if(this->s_name_.length()== t2.s_name_.length())
+        else if(this->s_name_== t2.s_name_)
         {
             if(this->accept_ts_<t2.accept_ts_)
                 return true;
@@ -33,7 +33,7 @@ bool IdTuple::operator<(const IdTuple &t2) const {
     }
 }
 bool IdTuple::operator==(const IdTuple &t2) const {
-    return this->csn_==t2.csn_ && this->s_name_.length()==t2.s_name_.length() && this->accept_ts_==t2.accept_ts_;
+    return this->csn_==t2.csn_ && this->s_name_==t2.s_name_ && this->accept_ts_==t2.accept_ts_;
 }
 bool IdTuple::operator<=(const IdTuple &t2) const {
     return ((*this) == t2 || (*this) < t2);

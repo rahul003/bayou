@@ -249,7 +249,7 @@ unordered_map<int, int> Client::GetServerVectorClock(int fd) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kServerVC) {
                     //SERVERVC-Port,Ts;Port,Ts;Port,Ts
-                    assert(token.size() == 2);
+                    D(assert(token.size() == 2);)
                     D(cout << "C" << get_pid() << " : VC received: " << token[1] << endl;)
                     ret = StringToUnorderedMap(token[1]);
                 } else {
@@ -283,11 +283,11 @@ void Client::GetWriteID(int fd) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kWriteID) {
                     //WRITEID-Port,Ts
-                    assert(token.size() == 2);
+                    D(assert(token.size() == 2);)
 
                     std::vector<string> entry = split(string(token[1]), kInternalDelim[0]);
 
-                    assert(token.size() == 2);
+                    D(assert(token.size() == 2));
                     int port = stoi(entry[0]);
                     int timestamp = stoi(entry[1]);
                     D(cout << "C" << get_pid() << " : WRITEID received: " << token[1] << endl;)
@@ -322,13 +322,13 @@ string Client::GetResultAndRelWrites(int fd) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kUrl) {
                     //READRESULT-url
-                    assert(token.size() == 2);
+                    D(assert(token.size() == 2));
                     D(cout << "C" << get_pid() << " : URL received: " << token[1] << endl;)
                     url = token[1];
                     count++;
                 } else if (token[0] == kRelWrites) {
                     //RELWRITES-Port,Ts;Port,Ts;Port,ts
-                    assert(token.size() == 2);
+                    D(assert(token.size() == 2));
                     D(cout << "C" << get_pid() << " : RELWRITES received: " << token[1] << endl;)
                     unordered_map<int, int> rel_writes = StringToUnorderedMap(token[1]);
                     UpdateReadVector(rel_writes);
@@ -410,17 +410,17 @@ void* ReceiveFromMaster(void* _C) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kPut) {
                     //PUT-SONG_NAME-URL
-                    assert(token.size() == 3);
+                    D(assert(token.size() == 3));
                     C->HandleWriteRequest(kPut, token[1], token[2]);
                     C->SendDoneToMaster();
                 } if (token[0] == kDelete) {
                     //DELETE-SONG_NAME
-                    assert(token.size() == 2);
+                    D(assert(token.size() == 2));
                     C->HandleWriteRequest(kDelete, token[1]);
                     C->SendDoneToMaster();
                 } else if (token[0] == kGet) {
                     //GET-SONG_NAME
-                    assert(token.size() == 2);
+                    D(assert(token.size() == 2));
                     string url = C->HandleReadRequest(token[1]);
                     C->SendMessageToMaster(url);
                 } else {    //other messages

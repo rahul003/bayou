@@ -17,10 +17,11 @@ const string kClientExecutable = "./bin/client";
 
 // message templates
 const string kMessageDelim = "$";
-const string kInternalDelim = "-";
-const string kInternalMapDelim = ":";
-const string kInternalListDelim = "/";
-const string kInternalWriteDelim = ".";
+const string kInternalDelim = "|";
+
+const string kInternalMapDelim = ";";
+const string kInternalListDelim = "`";
+const string kInternalWriteDelim = "^";
 const string kComma = ",";
 const string kSemiColon = ";";
 
@@ -46,7 +47,7 @@ const string kErrKey = "ERR_KEY";
 // sleep values
 const time_t kGeneralSleep = 1000 * 1000;
 const time_t kBusyWaitSleep = 500 * 1000;
-const time_t kAntiEntropyInterval = 500 * 1000;
+const time_t kAntiEntropyInterval = 1000 * 1000;
 
 //test commands
 const string kJoinServer = "joinServer";

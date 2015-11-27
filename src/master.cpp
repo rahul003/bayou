@@ -363,7 +363,7 @@ void Master::GetUrlFromClient(const int client_id) {
         for (const auto &msg : message) {
             std::vector<string> token = split(string(msg), kInternalDelim[0]);
             if (token[0] == kUrl) {
-                assert(token.size() == 2);
+                D(assert(token.size() == 2);)
                 D(cout << "M  : URL received from C"
                   << client_id << " : " << token[1] << endl;)
             } else {
