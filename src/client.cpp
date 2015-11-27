@@ -11,6 +11,7 @@
 #include "unistd.h"
 #include "signal.h"
 #include "errno.h"
+#include "assert.h"
 #include "sys/socket.h"
 
 using namespace std;
@@ -32,6 +33,9 @@ Client::Client(char** argv) {
     for (int i = 5; i < num_args; ++i) {
         server_fd_[atoi(argv[i])] = -1;
     }
+
+    read_vector_.clear();
+    write_vector_.clear();
 }
 
 int Client::get_pid() {
@@ -117,7 +121,7 @@ void Client::WaitForDone(const int fd) {
                 if (token[0] == kDone) {
                     D(cout << "C" << get_pid() << " : DONE received" << endl;)
                 } else {
-                    D(cout << "C" << get_pid() << " : Unexpected message received at fd="
+                    D(cout << "C" << get_pid() << " : ERROR Unexpected message received at fd="
                       << fd << ": " << msg << endl;)
                 }
             }
@@ -146,6 +150,246 @@ void Client::ConnectToMultipleServers() {
     }
 }
 
+void Client::UpdateReadVector(unordered_map<int, int>& rel_writes) {
+    for (auto& e : rel_writes) { // e = <port,clockvalue>
+        auto it = read_vector_.find(e.first);
+        if (it == read_vector_.end()) {
+            read_vector_[e.first] = e.second;
+        }
+        else {
+            read_vector_[e.first] = max(read_vector_[e.first], e.second);
+        }
+    }
+}
+
+bool Client::CheckSessionGuaranteesWrites(unordered_map<int, int>& server_vc) {
+    // Writes-Follow-Reads
+    for (auto& e : read_vector_) { // e = <port,clockvalue>
+        auto it = server_vc.find(e.first);
+        if (it == server_vc.end()) {
+            return false;
+        }
+        else {
+            if (it->second < e.second)
+                return false;
+        }
+    }
+
+    // Monotonic-Writes
+    for (auto& e : write_vector_) { // e = <port,clockvalue>
+        auto it = server_vc.find(e.first);
+        if (it == server_vc.end()) {
+            return false;
+        }
+        else {
+            if (it->second < e.second)
+                return false;
+        }
+    }
+
+    return true;
+}
+
+bool Client::CheckSessionGuaranteesReads(unordered_map<int, int>& server_vc) {
+    // Monotonic-Writes
+    for (auto& e : read_vector_) { // e = <port,clockvalue>
+        auto it = server_vc.find(e.first);
+        if (it == server_vc.end()) {
+            return false;
+        }
+        else {
+            if (it->second < e.second)
+                return false;
+        }
+    }
+
+    // Read-Your-Writes
+    for (auto& e : write_vector_) { // e = <port,clockvalue>
+        auto it = server_vc.find(e.first);
+        if (it == server_vc.end()) {
+            return false;
+        }
+        else {
+            if (it->second < e.second)
+                return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * sends vector clock request to server
+ * receives server's' vector clock
+ * @param  fd server's fd
+ * @return    server's vector clock
+ */
+unordered_map<int, int> Client::GetServerVectorClock(int fd) {
+    string message = kServerVC + kInternalDelim + kMessageDelim;
+    SendMessageToServer(message, fd);
+
+    char buf[kMaxDataSize];
+    int num_bytes;
+    unordered_map<int, int> ret;
+
+    bool done = false;
+    while (!done) { // connection with server has timeout
+        if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
+            // cout << errno << strerror(errno) << endl;
+            // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+        }
+        else {
+            done = true;
+            buf[num_bytes] = '\0';
+            std::vector<string> message = split(string(buf), kMessageDelim[0]);
+            for (const auto &msg : message) {
+                std::vector<string> token = split(string(msg), kInternalDelim[0]);
+                if (token[0] == kServerVC) {
+                    //SERVERVC-Port,Ts;Port,Ts;Port,Ts
+                    assert(token.size() == 2);
+                    D(cout << "C" << get_pid() << " : VC received: " << token[1] << endl;)
+                    ret = StringToUnorderedMap(token[1]);
+                } else {
+                    D(cout << "C" << get_pid() << " : ERROR Unexpected message received at fd="
+                      << fd << ": " << msg << endl;)
+                }
+            }
+        }
+    }
+    return ret;
+}
+
+void Client::GetWriteID(int fd) {
+    char buf[kMaxDataSize];
+    int num_bytes;
+
+    bool done = false;
+    while (!done) { // connection with server has timeout
+        if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
+            // cout << errno << strerror(errno) << endl;
+            // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+        }
+        else {
+            done = true;
+            buf[num_bytes] = '\0';
+            std::vector<string> message = split(string(buf), kMessageDelim[0]);
+            for (const auto &msg : message) {
+                std::vector<string> token = split(string(msg), kInternalDelim[0]);
+                if (token[0] == kWriteID) {
+                    //WRITEID-Port,Ts
+                    assert(token.size() == 2);
+
+                    std::vector<string> entry = split(string(token[1]), kInternalDelim[0]);
+
+                    assert(token.size() == 2);
+                    int port = stoi(entry[0]);
+                    int timestamp = stoi(entry[1]);
+                    D(cout << "C" << get_pid() << " : WRITEID received: " << token[1] << endl;)
+                    write_vector_[port] = timestamp;
+                } else {
+                    D(cout << "C" << get_pid() << " : ERROR Unexpected message received at fd="
+                      << fd << ": " << msg << endl;)
+                }
+            }
+        }
+    }
+}
+
+string Client::GetResultAndRelWrites(int fd) {
+    char buf[kMaxDataSize];
+    int num_bytes;
+    string url;
+
+    int count = 0;
+    while (count != 2) { // connection with server has timeout
+        if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
+            // cout << errno << strerror(errno) << endl;
+            // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+        }
+        else {
+            buf[num_bytes] = '\0';
+            std::vector<string> message = split(string(buf), kMessageDelim[0]);
+            for (const auto &msg : message) {
+                std::vector<string> token = split(string(msg), kInternalDelim[0]);
+                if (token[0] == kUrl) {
+                    //READRESULT-url
+                    assert(token.size() == 2);
+                    D(cout << "C" << get_pid() << " : URL received: " << token[1] << endl;)
+                    url = token[1];
+                    count++;
+                } else if (token[0] == kRelWrites) {
+                    //RELWRITES-Port,Ts;Port,Ts;Port,ts
+                    assert(token.size() == 2);
+                    D(cout << "C" << get_pid() << " : RELWRITES received: " << token[1] << endl;)
+                    unordered_map<int, int> rel_writes = StringToUnorderedMap(token[1]);
+                    UpdateReadVector(rel_writes);
+                    count++;
+                } else {
+                    D(cout << "C" << get_pid() << " : ERROR Unexpected message received at fd="
+                      << fd << ": " << msg << endl;)
+                }
+            }
+        }
+    }
+    return url;
+}
+
+void Client::HandleWriteRequest(string type, string song_name, string url) {
+    string message;
+
+    if (type == kPut)
+        message = kPut + kInternalDelim +
+                  song_name + kInternalDelim +
+                  url + kMessageDelim;
+    else if (type == kDelete)
+        message = kDelete + kInternalDelim +
+                  song_name + kMessageDelim;
+
+    for (auto server_port : connected_servers_) {
+        unordered_map<int, int> server_vc =
+            GetServerVectorClock(get_server_fd(server_port));
+        if (CheckSessionGuaranteesWrites(server_vc)) {
+            SendMessageToServer(message, get_server_fd(server_port));
+            GetWriteID(get_server_fd(server_port));
+            break;
+        } else {
+            // do nothing. Just drop the write
+        }
+    }
+}
+
+/**
+ * handles get request
+ * @param  song_name name of song
+ * @return           url of requested song
+ */
+string Client::HandleReadRequest(string song_name) {
+    string message = kGet + kInternalDelim +
+                     song_name + kMessageDelim;
+
+    for (auto server_port : connected_servers_) {
+        unordered_map<int, int> server_vc =
+            GetServerVectorClock(server_port);
+        if (CheckSessionGuaranteesReads(server_vc)) {
+            SendMessageToServer(message, get_server_fd(server_port));
+            return kUrl + kInternalDelim +
+                   GetResultAndRelWrites(server_port) + kMessageDelim;
+        } else {
+            return kUrl + kInternalDelim + kErrDep + kMessageDelim;
+        }
+    }
+    return "";
+}
+
 void* ReceiveFromMaster(void* _C) {
     Client* C = (Client*)_C;
     char buf[kMaxDataSize];
@@ -164,14 +408,26 @@ void* ReceiveFromMaster(void* _C) {
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
-
-                // if (token[0] == ) {
-
-                // } else {    //other messages
-                //     D(cout << "C" << C->get_pid()
-                //       << " : ERROR Unexpected message received from M: "
-                //       << message << endl;)
-                // }
+                if (token[0] == kPut) {
+                    //PUT-SONG_NAME-URL
+                    assert(token.size() == 3);
+                    C->HandleWriteRequest(kPut, token[1], token[2]);
+                    C->SendDoneToMaster();
+                } if (token[0] == kDelete) {
+                    //DELETE-SONG_NAME
+                    assert(token.size() == 2);
+                    C->HandleWriteRequest(kDelete, token[1]);
+                    C->SendDoneToMaster();
+                } else if (token[0] == kGet) {
+                    //GET-SONG_NAME
+                    assert(token.size() == 2);
+                    string url = C->HandleReadRequest(token[1]);
+                    C->SendMessageToMaster(url);
+                } else {    //other messages
+                    D(cout << "C" << C->get_pid()
+                      << " : ERROR Unexpected message received from M: "
+                      << msg << endl;)
+                }
             }
         }
     }

@@ -31,7 +31,7 @@ bin/client-socket.o: src/client-socket.cpp inc/client.h inc/constants.h
 	g++ -g -std=c++0x -c src/client-socket.cpp -o bin/client-socket.o
 
 #general
-bin/utils.o: src/utils.cpp inc/utils.h
+bin/utils.o: src/utils.cpp inc/utils.h inc/constants.h
 	g++ -g -std=c++0x -c src/utils.cpp -o bin/utils.o
 
 clean:

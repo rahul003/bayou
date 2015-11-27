@@ -1,4 +1,6 @@
 #include "../inc/utils.h"
+#include "../inc/constants.h"
+
 #include "string"
 #include "vector"
 #include "iostream"
@@ -6,6 +8,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <assert.h>
 
 using namespace std;
 #define DEBUG
@@ -94,4 +97,16 @@ int GetPeerPortFromFd(int fd) {
         }
         return port;
     }
+}
+
+unordered_map<int, int> StringToUnorderedMap(string str) {
+    // Port,Ts;Port,Ts;Port,ts
+    unordered_map<int, int> ans;
+    std::vector<string> tuple = split(str, kSemiColon[0]);
+    for (const auto t : tuple) {
+        std::vector<string> entry = split(t, kComma[0]);
+        assert(entry.size() == 2);
+        ans[stoi(entry[0])] = stoi(entry[1]);
+    }
+    return ans;
 }

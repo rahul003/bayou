@@ -19,9 +19,18 @@ public:
     bool SpawnClient(const int c_id, const int s_id);
     void KillAllProcesses();
     void SendMessageToServer(const int server_id, const string & message);
+    void SendMessageToClient(const int client_id, const string & message);
     void ConstructMessage(const string& type, const string &body, string &message);
     void WaitForPortMessage(const int fd);
     void WaitForDone(const int fd);
+    void SendPutToClient(int client_id,
+                         const string& song_name,
+                         const string& url);
+    void GetUrlFromClient(const int client_id);
+    void SendGetToClient(int client_id,
+                         const string& song_name);
+    void SendDeleteToClient(int client_id,
+                            const string& song_name);
 
     void SetCloseExecFlag(const int fd);
 

@@ -16,6 +16,7 @@
 #include "errno.h"
 #include "limits.h"
 #include "sys/socket.h"
+#include "assert.h"
 #include "pthread.h"
 using namespace std;
 
@@ -343,6 +344,92 @@ void Master::WaitForPortMessage(const int fd) {
 }
 
 /**
+ * receives URL from client
+ * @param client_id id of client
+ */
+void Master::GetUrlFromClient(const int client_id) {
+    char buf[kMaxDataSize];
+    int num_bytes;
+
+    if ((num_bytes = recv(get_client_fd(client_id), buf, kMaxDataSize - 1, 0)) == -1) {
+        D(cout << "M  : ERROR in receiving url from C" << client_id << endl;)
+    }
+    else if (num_bytes == 0) {   //connection closed
+        D(cout << "M  : ERROR Connection closed by C" << client_id << endl;)
+    }
+    else {
+        buf[num_bytes] = '\0';
+        std::vector<string> message = split(string(buf), kMessageDelim[0]);
+        for (const auto &msg : message) {
+            std::vector<string> token = split(string(msg), kInternalDelim[0]);
+            if (token[0] == kUrl) {
+                assert(token.size() == 2);
+                D(cout << "M  : URL received from C"
+                  << client_id << " : " << token[1] << endl;)
+            } else {
+                D(cout << "M  : Unexpected message received from C"
+                  << client_id << ": " << msg << endl;)
+            }
+        }
+    }
+}
+
+/**
+ * sends put command to client
+ * @param client_id id of client to which command needs to be sent
+ * @param song_name song name to be put
+ * @param url       url associated with song_name
+ */
+void Master::SendPutToClient(int client_id,
+                             const string& song_name,
+                             const string& url) {
+    string message = kPut + kInternalDelim +
+                     song_name + kInternalDelim +
+                     url + kMessageDelim;
+    SendMessageToClient(client_id, message);
+    WaitForDone(get_client_fd(client_id));
+}
+
+/**
+ * sends delete command to client
+ * @param client_id id of client to which command needs to be sent
+ * @param song_name song name to be deleted
+ */
+void Master::SendDeleteToClient(int client_id,
+                                const string& song_name) {
+    string message = kDelete + kInternalDelim +
+                     song_name + kMessageDelim;
+    SendMessageToClient(client_id, message);
+    WaitForDone(get_client_fd(client_id));
+}
+
+/**
+ * sends get command to client
+ * @param client_id id of client to which command needs to be sent
+ * @param song_name song name whose url needs to be retrieved
+ */
+void Master::SendGetToClient(int client_id,
+                             const string& song_name) {
+    string message = kGet + kInternalDelim +
+                     song_name + kMessageDelim;
+    SendMessageToClient(client_id, message);
+    GetUrlFromClient(get_client_fd(client_id));
+}
+
+/**
+ * sends message to a client
+ * @param client_id id of client to which message needs to be sent
+ * @param message   message to be sent
+ */
+void Master::SendMessageToClient(const int client_id, const string & message) {
+    if (send(get_client_fd(client_id), message.c_str(), message.size(), 0) == -1) {
+        D(cout << "M  : ERROR: Cannot send message to C" << client_id << endl;)
+    } else {
+        D(cout << "M  : Message sent to C" << client_id << ": " << message << endl;)
+    }
+}
+
+/**
  * sends message to a server
  * @param server_id id of server to which message needs to be sent
  * @param message   message to be sent
@@ -392,11 +479,15 @@ void Master::ReadTest() {
                 SpawnServer(id, true);
                 set_primary_id(id);
             }
-        }
-        else if (keyword == kJoinClient) {
+        } else if (keyword == kJoinClient) {
             int cid, sid;
             iss >> cid >> sid;
             SpawnClient(cid, sid);
+        } else if (keyword == kPut) {
+            int cid;
+            string song_name, url;
+            iss >> cid >> song_name >> url;
+            SendPutToClient(cid, song_name, url);
         }
     }
 }

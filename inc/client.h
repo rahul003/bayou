@@ -14,18 +14,29 @@ class Client {
 public:
     Client(char**);
 
-    void ConstructMessage(const string& type, const string &body, string &message);
     void SendMessageToMaster(const string & message);
     void SendMessageToServer(const string & message, int fd);
     void SendDoneToMaster();
-    void ConnectToMultipleServers();
-    void EstablishMasterCommunication();
+    
+    void ConstructMessage(const string& type, const string &body, string &message);
     void ConstructIAmMessage(const string& type,
                              const string &process_type,
                              string &message);
+    
+    void EstablishMasterCommunication();
     void WaitForDone(const int fd);
+    
+    void HandleWriteRequest(string type, string song_name, string url = "");
+    string HandleReadRequest(string song_name);
+    void UpdateReadVector(unordered_map<int, int>& rel_writes);
+    bool CheckSessionGuaranteesWrites(unordered_map<int, int>& server_vc);
+    bool CheckSessionGuaranteesReads(unordered_map<int, int>& server_vc);
+    unordered_map<int, int> GetServerVectorClock(int fd);
+    void GetWriteID(int fd);
+    string GetResultAndRelWrites(int fd);
 
     bool ConnectToMaster();
+    void ConnectToMultipleServers();
     bool ConnectToServer(const int port);
 
     int get_pid();
@@ -47,6 +58,9 @@ private:
 
     std::unordered_map<int, int> server_fd_; // hash of port to fd
     std::unordered_set<int> connected_servers_; // set of ports of connected servers
+
+    std::unordered_map<int, int> read_vector_;  // hash of port to clockvalue
+    std::unordered_map<int, int> write_vector_;
 };
 
 #endif //CLIENT_H_

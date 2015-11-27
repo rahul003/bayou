@@ -19,6 +19,7 @@ const string kClientExecutable = "./bin/client";
 const string kMessageDelim = "$";
 const string kInternalDelim = "-";
 const string kComma = ",";
+const string kSemiColon = ";";
 
 const string kDone = "DONE";
 const string kPort = "PORT";
@@ -26,9 +27,14 @@ const string kServerPort = "SPORT";
 const string kIAm = "IAM";
 const string kYouAre = "YOUARE";
 const string kNewServer = "NEWSERVER";
-
+const string kUrl = "URL";
 const string kServer = "SERVER";
 const string kClient = "CLIENT";
+const string kServerVC = "SERVERVC";
+const string kWriteID = "WRITEID";
+const string kRelWrites = "RELWRITES";
+const string kErrDep = "ERR_DEP";
+const string kErrKey = "ERR_KEY";
 
 // sleep values
 const time_t kGeneralSleep = 1000 * 1000;
