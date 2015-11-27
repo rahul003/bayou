@@ -1,6 +1,9 @@
 #include "../inc/utils.h"
+#include "../inc/constants.h"
+#include "../inc/data_classes.h"
 #include "string"
 #include "vector"
+#include "unordered_map"
 #include "iostream"
 #include "sstream"
 #include <string.h>

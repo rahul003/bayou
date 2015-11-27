@@ -39,7 +39,7 @@ Server::Server(char** argv)
         set_name(kPrimary);
     }
 
-    csn_=-1;
+    max_csn_=-1;
 }
 
 int Server::get_pid() {
@@ -121,9 +121,9 @@ void Server::set_server_name(int port, const string& name) {
     pthread_mutex_unlock(&server_lock);
 }
 
-std::unordered_map<string, int> Server::GetServerFdCopy() {
+std::map<string, int> Server::GetServerFdCopy() {
     pthread_mutex_lock(&server_lock);
-    std::unordered_map<string, int> server_fd_copy(server_fd_);
+    std::map<string, int> server_fd_copy(server_fd_);
     pthread_mutex_unlock(&server_lock);
     return server_fd_copy;
 }
@@ -180,8 +180,8 @@ void* AntiEntropyP1(void* _S) {
     while(true)
     {
         usleep(kAntiEntropyInterval);
-        cur_server = GetNextServer(cur_server);
-        SendMessageToServer(cur_server,msg);
+        cur_server = S->GetNextServer(cur_server);
+        S->SendMessageToServer(cur_server,msg);
     }
     return NULL;
 }
@@ -226,7 +226,7 @@ void Server::CreateFdSet(fd_set& fromset,
     // }
 
     // server fds
-    unordered_map<string, int> server_fd_copy = GetServerFdCopy();
+    map<string, int> server_fd_copy = GetServerFdCopy();
     for (auto it = server_fd_copy.begin(); it != server_fd_copy.end(); ) {
         fd_temp = it->second;
         if (fd_temp == -1) {
@@ -277,7 +277,7 @@ void Server::CreateFdSet(fd_set& fromset,
     }
 }
 
-void Server::ReceiveFromServersAndMisc()
+void Server::ReceiveFromServersAndMiscMode()
 {
     char buf[kMaxDataSize];
     int num_bytes;
@@ -357,15 +357,17 @@ void Server::ReceiveFromServersAndMisc()
                             {
                                 D(assert(token.size()==3);)
                                 int recvd_csn = stoi(token[1]);
-                                unordered_map<string, int> recvd_clock = StringToClock(token[2]);
+                                unordered_map<string, int> recvd_clock;
+                                StringToClock(token[2], recvd_clock);
                                 string msg;
                                 ConstructAEP2Message(msg, recvd_csn, recvd_clock);
-                                SendMessageToServerByFd(msg, fds[i]);
+                                SendMessageToServerByFd(fds[i], msg);
                             }
                             else if(token[0]==kAntiEntropyP2)
                             {
                                 D(assert(token.size()==4);)
-                                ExtractAEP2Message(token[1], token[2], token[3]);
+                                if((!token[2].empty()) || (!token[3].empty()))
+                                    ExtractAEP2Message(token[2], token[3]);
                             }
                             else {    //other messages
                                 D(cout << "S" << get_pid()
@@ -381,7 +383,7 @@ void Server::ReceiveFromServersAndMisc()
 
 void* ReceiveFromServersAndMisc(void* _S) {
     Server* S = (Server*)_S;
-    S->ReceiveFromServersAndMisc();
+    S->ReceiveFromServersAndMiscMode();
     return NULL;
 }
 
@@ -442,74 +444,52 @@ void Server::SendAEP1Response(int fd)
     SendMessageToServerByFd(fd, msg);
 }
 
-void Server::ConstructAEP2Message(string& msg, const int& r_csn, const unordered_map<string, int>& r_clock)
+void Server::ConstructAEP2Message(string& msg, const int& r_csn, unordered_map<string, int>& r_clock)
 {
-    //AEP2-c1.n1.w1,c2.n2.w2-c1.n1.w1.m1-n1.w1,m1
-    //AEP2-commitnotif-commitedwrites-tentativewrites$
+    //AEP2-c1.n1.w1.m1-n1.w1,m1
+    //AEP2-commitedwrites-tentativewrites$
     //only this thread will use max_csn no need of lock
     msg += kAntiEntropyP2+kInternalDelim;
-    string already_present,new_committed,new_tent;
+    string committed,new_tent;
     if(r_csn<max_csn_)
     {
         //gives first element higher than this
-        auto it = vclock_.lower_bound(IdTuple(r_csn+1,"",0));
+        auto it = write_log_.lower_bound(IdTuple(r_csn+1,"",0));
         while(it->first.get_csn()<=max_csn_)
         {  
-            if(it->first.get_accept_ts()<=r_clock[it->first.get_sname()])
-            {
-                //already has write
-                already_present+=it->first.as_string()+kComma;
-            }
-            else
-            {
-                new_committed+=WriteToString(it->first, it->second)+kComma;
-            }
+            committed+=WriteToString(it->first, it->second)+kComma;
             it++;
         }
     }
-    msg+=already_present+kInternalDelim;
-    msg+=new_committed+kInternalDelim;
-    while(it!=vclock_.end())
+    msg+=committed+kInternalDelim;
+    auto it = write_log_.lower_bound(IdTuple(max_csn_+1,"", 0));
+    while(it!=write_log_.end())
     {
-        if(it->first.get_accept_ts()>r_clock[it->first.get_sname()])
+        if((it->first.get_accept_ts())>(r_clock[it->first.get_sname()]))
         {
             new_tent+=WriteToString(it->first, it->second)+kComma;
-            it++;
         }
+        it++;
     }
     msg+=new_tent+kMessageDelim;
 }
-void Server::RollBack(const string& commit_notifs, const string& committed_writes, const string& tent_writes)
+IdTuple Server::RollBack(const string& committed_writes, const string& tent_writes)
 {
     IdTuple earliest;
     bool earliest_found = false;
     vector<string> writes, parts;
-    if(!commit_notifs.empty()){
-        writes = split(commit_notifs, kComma[0]);
+    if(!committed_writes.empty()){
+        writes = split(committed_writes, kComma[0]);
         parts = split(writes[0], kInternalWriteDelim[0]);
-        Idtuple cur_first(parts[0], parts[1], parts[2]);
-        
+        IdTuple cur_first(stoi(parts[0]), parts[1], stoi(parts[2]));
         earliest = cur_first;
         earliest_found = true;
     }
-    if(!committed_writes.empty()){
-        writes = split(commit_notifs, kComma[0]);
-        parts = split(writes[0], kInternalWriteDelim[0]);
-        Idtuple cur_first(parts[0], parts[1], parts[2]);
-        if(!earliest_found)
-        {
-            earliest = cur_first;
-            earliest_found = true;
-        }
-        else if(cur_first<earliest){
-            earliest = cur_first;
-        }
-    }
     if(!tent_writes.empty() && !earliest_found)
     {
-        writes = split(commit_notifs, kComma[0]);
+        writes = split(tent_writes, kComma[0]);
         parts = split(writes[0], kInternalWriteDelim[0]);
-        Idtuple cur_first(INT_MAX, parts[0], parts[1]);
+        IdTuple cur_first(INT_MAX, parts[0], stoi(parts[1]));
         
         earliest = cur_first;
         earliest_found = true;        
@@ -531,78 +511,78 @@ void Server::RollBack(const string& commit_notifs, const string& committed_write
         undo_log_.erase(it->first);
         it++;
     }
+    return earliest;
 }
 
-void Server::ExtractAEP2Message(const string& commit_notifs, const string& committed_writes, const string& tent_writes){
-    //AEP2-c1.n1.w1,c2.n2.w2-c1.n1.w1.m1-n1.w1,m1
-    //AEP2-commitnotif-commitedwrites-tentativewrites$
-    RollBack(commit_notifs, committed_writes, tent_writes);
+void Server::ExtractAEP2Message(const string& committed_writes, const string& tent_writes){
+    //AEP2-c1.n1.w1.m1-n1.w1,m1
+    //AEP2-commitedwrites-tentativewrites$
+    IdTuple from = RollBack(committed_writes, tent_writes);
 
-    vector<string> writes = split(commit_notifs, kComma[0]);
+    vector<string> writes = split(committed_writes, kComma[0]);
     for(auto &p: writes)
     {
-        //commit notification
-        vector<string> parts = split(p, kInternalWriteDelim);
-        D(assert(parts.size()==3);)
+        vector<string> parts = split(p, kInternalWriteDelim[0]);
+        D(assert(parts.size()==6);)
         IdTuple w(INT_MAX, parts[1], stoi(parts[2]));
-        Command c = write_log_[w];
-        write_log_.erase(w);
+        if(write_log_.find(w)!=write_log_.end())
+        {
+            write_log_.erase(w);
+        }
+        Command c(parts[3], parts[4], parts[5]);
         IdTuple w_new(stoi(parts[0]), parts[1], stoi(parts[2]));
         write_log_[w_new] = c;
-        //will never have to undo this. so not adding this in undo log        
-        ExecCommandOnDatabase(w_new, parts[3], parts[4], parts[5]);
-    }
-    writes = split(committed_writes, kComma[0]);
-    for(auto &p: writes)
-    {
-        vector<string> parts = split(p, kInternalWriteDelim);
-        D(assert(parts.size()==6);)
-        IdTuple w(stoi(parts[0]), parts[1], stoi(parts[2]));
-        Command c(parts[3], parts[4], parts[5]);
-        write_log_[w] = c;
-        ExecCommandOnDatabase(w, parts[3], parts[4], parts[5]);
-
     }
     writes = split(tent_writes, kComma[0]);
     for(auto &p: writes)
     {
-        vector<string> parts = split(p, kInternalWriteDelim);
+        vector<string> parts = split(p, kInternalWriteDelim[0]);
         D(assert(parts.size()==5);)
         IdTuple w(INT_MAX, parts[0], stoi(parts[1]));
         Command c(parts[2], parts[3], parts[4]);
         write_log_[w] = c;
-        ExecCommandOnDatabase(w, parts[3], parts[4], parts[5]);
     }
+
+    ExecuteCommandsOnDatabase(from);
+
 }
-void Server::ExecCommandInDatabase(const IdTuple& w, const string& type, const string& song, const string& url)
+// ExecCommandOnDatabase(w_new, parts[3], parts[4], parts[5]);
+
+void Server::ExecuteCommandsOnDatabase(IdTuple from)
 {
-    if (type==kPut)
+    auto it=write_log_.find(from);
+
+    while(it!=write_log_.end())
     {
-        if(database_.find(song)==database_.end())
+        IdTuple w = it->first;
+        string song = it->second.get_song();
+        string url = it->second.get_url();
+        string type = it->second.get_type();
+
+        if (type==kPut)
         {
-            //wasnt in database
-            undo_log_[w] = Command(kDelete, song);
+            if(database_.find(song)==database_.end())
+            {
+                //wasnt in database
+                undo_log_[w] = Command(kDelete, song);
+            }
+            else
+            {
+                //overwritten
+                undo_log_[w] = Command(kUndo, song, database_[song]);
+            }
+            database_[song] = url;
         }
-        else
+        else if (type==kDelete)
         {
-            //overwritten
             undo_log_[w] = Command(kUndo, song, database_[song]);
+            database_.erase(song);
         }
-        database_[song] = url;
+        it++;
     }
-    else if (type==kDelete)
-    {
-        undo_log_[w] = Command(kUndo, song, database_[song]);
-        database_.erase(song);
-    }
+    
 }
-void Server::AddToUndoLog(IdTuple i , Command c)
-{
-    if(c.get_type()==kPut)
-    {
-        undo_log_[i] = Command()
-    }
-}
+
 
 void Server::SendMessageToServerByFd(int fd, const string & message) {
     if (send(fd, message.c_str(), message.size(), 0) == -1) {

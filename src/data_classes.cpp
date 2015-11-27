@@ -1,10 +1,15 @@
 #include "../inc/data_classes.h"
+#include "../inc/constants.h"
 
 IdTuple::IdTuple(int csn, string sname, int ts)
 {
     csn_ = csn;
     s_name_ = sname;
     accept_ts_ = ts;
+}
+IdTuple::IdTuple()
+{
+
 }
 
 bool IdTuple::operator<(const IdTuple &t2) const {
@@ -40,13 +45,13 @@ bool IdTuple::operator>=(const IdTuple &t2) const {
     return !((*this) < t2 );
 }
 
-int IdTuple::get_csn(){
+int IdTuple::get_csn() const{
     return csn_;
 }
-int IdTuple::get_accept_ts(){
+int IdTuple::get_accept_ts() const{
     return accept_ts_;
 }
-string IdTuple::get_sname(){
+string IdTuple::get_sname() const{
     return s_name_;
 }
 string IdTuple::as_string(){
@@ -69,6 +74,9 @@ Command::Command(string a, string b)
 {
     type_ = a;
     song_ = b;
+}
+Command::Command(){
+    
 }
 string Command::as_string(){
     string m;

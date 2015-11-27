@@ -8,13 +8,14 @@
 #include "map"
 #include "unordered_map"
 #include "utils.h"
+#include "data_classes.h"
 using namespace std;
 
 void* ReceiveMessagesFromClient(void* _rcv_thread_arg);
 void* ReceiveFromMaster(void* _S);
 void* ReceiveFromServersAndMisc(void* _S);
 void* AcceptConnections(void* _S);
-
+void* AntiEntropyP1(void* _S);
 class Server {
 public:
     Server(char**);
@@ -25,20 +26,25 @@ public:
     void ConnectToAllServers(char** argv);
     bool ConnectToMaster();
 
+    void ReceiveFromServersAndMiscMode();
+
     void SendMessageToServer(const string&, const string &);
-    void SendInitialMessageToServer(int , const string &);
+    void SendMessageToServerByFd(int , const string &);
     void SendMessageToMaster(const string & message);
     void SendMessageToClient(int fd, const string& message);
     void SendDoneToClient(int fd);
     void SendDoneToMaster();
 
+    string GetNextServer(string);
+    void SendAEP1Response(int fd);
+
     void InitializeLocks();
     void EstablishMasterCommunication();
-    void InitialSetup(pthread_t&, pthread_t&, pthread_t&);
+    void InitialSetup(pthread_t&, pthread_t&, pthread_t&, pthread_t&);
     void HandleInitialServerHandshake(int port, int fd, const std::vector<string>& token);
 
     void RemoveFromMiscFd(int port);
-    std::unordered_map<string, int> GetServerFdCopy();
+    std::map<string, int> GetServerFdCopy();
     std::unordered_map<int, int> GetMiscFdCopy();
     void CreateFdSet(fd_set & fromset,
                      vector<int>& fds,
@@ -47,6 +53,11 @@ public:
     void ConstructIAmMessage(const string&, const string &, const string& , string &);
     void ConstructMessage(const string&, const string& , string &);
     void ConstructPortMessage(string & message);
+    void ConstructAEP2Message(string& msg, const int& r_csn, unordered_map<string, int>& r_clock);
+    void ExtractAEP2Message(const string&, const string&);
+    void ExecuteCommandsOnDatabase(IdTuple from);
+    IdTuple RollBack(const string& committed_writes, const string& tent_writes);
+
 
     int get_pid();
     string get_name();
@@ -77,9 +88,17 @@ private:
 
     //maps port to name
     std::unordered_map<int, string> server_name_;
-    std::unordered_map<string, int> server_fd_;
+    std::map<string, int> server_fd_;
     std::unordered_map<int, int> client_fd_; // hash of fd to port
     std::unordered_map<int, int> misc_fd_; // hash of port to fd for <port, fd> tuples whose origin is not known yet
+
+    std::unordered_map<string, int> vclock_;
+    int max_csn_;
+    
+    std::unordered_map<string, string> database_;
+    std::map<IdTuple, Command> write_log_;
+    std::map<IdTuple, Command> undo_log_;
+
 
 };
 

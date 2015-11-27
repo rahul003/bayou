@@ -18,6 +18,9 @@ const string kClientExecutable = "./bin/client";
 // message templates
 const string kMessageDelim = "$";
 const string kInternalDelim = "-";
+const string kInternalMapDelim = ":";
+const string kInternalListDelim = "/";
+const string kInternalWriteDelim = ".";
 const string kComma = ",";
 
 const string kDone = "DONE";
@@ -27,12 +30,18 @@ const string kIAm = "IAM";
 const string kYouAre = "YOUARE";
 const string kNewServer = "NEWSERVER";
 
+const string kAntiEntropyP1 = "AEP1"; //AEP1$
+const string kAntiEntropyP1Resp = "AEP1R"; //AEP1R-csn-clock(x:0,y:2)$
+const string kAntiEntropyP2 = "AEP2"; 
+//AEP2-c1.n1.w1,c2.n2.w2-c1.n1.w1.m1-n1.w1,m1
+//AEP2-commitnotif-commitedwrites-tentativewrites$
 const string kServer = "SERVER";
 const string kClient = "CLIENT";
 
 // sleep values
 const time_t kGeneralSleep = 1000 * 1000;
 const time_t kBusyWaitSleep = 500 * 1000;
+const time_t kAntiEntropyInterval = 500 * 1000;
 
 //test commands
 const string kJoinServer = "joinServer";
@@ -42,6 +51,7 @@ const string kBreakConnection = "breakConnection";
 const string kRestoreConnection = "restoreConnection";
 
 const string kPut = "put";
+const string kUndo = "undo";
 const string kGet = "get";
 const string kDelete = "delete";
 
