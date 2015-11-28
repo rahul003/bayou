@@ -536,6 +536,22 @@ void Master::KillAllProcesses() {
     }
 }
 
+void Master::SendChangeConnectionServer(string type, int id, int port){
+
+    string msg = type + kInternalDelim;
+    msg += to_string(port) + kInternalDelim + kMessageDelim;
+    SendMessageToServer(id, msg);
+    WaitForDone(get_server_fd(id));
+}
+
+void Master::SendChangeConnectionClient(string type, int id, int port){
+
+    string msg = type + kInternalDelim;
+    msg += to_string(port) + kInternalDelim + kMessageDelim;
+    SendMessageToClient(id, msg);
+    WaitForDone(get_client_fd(id));
+}
+
 /**
  * kills the specified server. Set its pid and fd to -1
  * @param server_id id of server to be killed
@@ -576,17 +592,61 @@ void Master::ReadTest() {
                 SpawnServer(id, true);
                 set_primary_id(id);
             }
-        }
-        else if (keyword == kRetireServer)
-        {
+            servers_.AddNode(id);
+
+        } else if (keyword == kRetireServer){
             int id;
             iss >> id;
             SendRetireMessage(id);
             WaitForDone(get_server_fd(id));
             CrashServer(id);
-        }
-        else if(keyword == kPrintLog)
-        {
+
+            servers_.RemoveNode(id);
+
+        } else if(keyword == kBreakConnection){
+            int id1, id2;
+            iss>> id1 >> id2;
+
+            if(is_client_id(id1) && is_server_id(id2))
+            {
+                // SendChangeConnectionServer(kBreakConnection, id2, client_listen_port_[id1]);
+                SendChangeConnectionClient(kBreakConnection, id1, server_listen_port_[id2]);
+            }
+            if(is_server_id(id1) && is_client_id(id2))
+            {
+                // SendChangeConnectionServer(kBreakConnection, id1, client_listen_port_[id2]);
+                SendChangeConnectionClient(kBreakConnection, id2, server_listen_port_[id1]);
+            }
+            if(is_server_id(id1) && is_server_id(id2))
+            {
+                SendChangeConnectionServer(kBreakConnection, id1, server_listen_port_[id2]);
+                // SendChangeConnectionServer(kBreakConnection, id2, server_listen_port_[id1]);
+                servers_.RemoveEdge(id1, id2);
+            }  
+        }else if(keyword == kRestoreConnection){
+            int id1, id2;
+            iss>> id1 >> id2;
+            //to make things simple, restore is sent to client only if a client is part of the pair
+            if(is_client_id(id1) && is_server_id(id2))
+            {
+                // SendChangeConnectionServer(kRestoreConnection, id2, client_listen_port_[id1]);
+                SendChangeConnectionClient(kRestoreConnection, id1, server_listen_port_[id2]);
+            }
+            if(is_server_id(id1) && is_client_id(id2))
+            {
+                // SendChangeConnectionServer(kRestoreConnection, id1, client_listen_port_[id2]);
+                SendChangeConnectionClient(kRestoreConnection, id2, server_listen_port_[id1]);
+            }
+            if(is_server_id(id1) && is_server_id(id2))
+            {
+                //any1 is good enough
+                SendChangeConnectionServer(kRestoreConnection, id1, server_listen_port_[id2]);
+                // SendChangeConnectionServer(kRestoreConnection, id2, server_listen_port_[id1]);
+                servers_.AddEdge(id1, id2);
+            }  
+        }else if (keyword == kStabilize){
+            StabilizeMode();
+        }else if(keyword == kPrintLog){
             int id;
             iss>>id;
             if(SendLogRequest(id) !=0 )
@@ -597,18 +657,15 @@ void Master::ReadTest() {
             string msg = kPause + kInternalDelim + kMessageDelim;
             int num = SendToAllServers(msg);
             WaitForAll(num);
-        }
-        else if(keyword == kStart)
-        {
+        } else if(keyword == kStart){
             string msg = kStart + kInternalDelim + kMessageDelim;
             int num = SendToAllServers(msg);
             WaitForAll(num);
-        }
-        else if (keyword == kJoinClient) {
+        } else if (keyword == kJoinClient){
             int cid, sid;
             iss >> cid >> sid;
             SpawnClient(cid, sid);
-        } else if (keyword == kPut) {
+        } else if (keyword == kPut){
             int cid;
             string song_name, url;
             iss >> cid >> song_name >> url;
@@ -625,6 +682,71 @@ void Master::ReadTest() {
             SendDeleteToClient(cid, song_name);
         }
     }
+}
+
+void Master::StabilizeMode(){
+    set<set<int> > components = servers_.GetConnectedComponents();
+    string msg = kServerVC + kInternalDelim + kMessageDelim;
+    for(auto &comp : components)
+    {
+        auto it = comp.begin();
+        unordered_map<string, int> prev_vclock;
+        while(it!=comp.end())
+        {
+            SendMessageToServer((*it), msg);
+            unordered_map<string, int> vclock = WaitForVC(*it);
+            if(it==comp.begin())
+                prev_vclock = vclock;
+            if(vclock != prev_vclock)
+            {
+                it = comp.begin();
+                usleep(kBusyWaitSleep);
+            }
+            else
+                it++;
+        }
+        //this comes out when all VCs in a connected component are equal
+    }
+}
+
+unordered_map<string, int> Master::WaitForVC(int sid){
+    char buf[kMaxDataSize];
+    int num_bytes;
+    unordered_map<string, int> rval;
+    bool done = false;
+    while (!done) {     // connection with server has timeout
+        if ((num_bytes = recv(get_server_fd(sid), buf, kMaxDataSize - 1, 0)) == -1) {
+            // D(cout << "M  : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "M  : ERROR Connection closed by server S" << sid << endl;)
+            done = true;
+        }
+        else {
+            buf[num_bytes] = '\0';
+            std::vector<string> message = split(string(buf), kMessageDelim[0]);
+            for (const auto &msg : message) {
+                std::vector<string> token = split(string(msg), kInternalDelim[0]);
+                if (token[0] == kServerVC) {
+                    done = true;
+                    D(assert(token.size()==2);)
+                    rval = StringToUnorderedMap(token[1]);
+                } else {
+                    D(cout<<"M  : ERROR Unexpected message received in WaitForVC from "<<sid<<": "<<msg<<endl;)
+                }
+            }
+        }
+    }
+}
+
+bool Master::is_client_id(int id){
+    return !(is_server_id(id));
+}
+bool Master::is_server_id(int id){
+    if(server_listen_port_.find(id)!=server_listen_port_.end())
+        return true;
+    else
+        return false;
 }
 
 int main() {

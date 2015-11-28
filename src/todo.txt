@@ -1,5 +1,1 @@
 todo
-
-change CSN for writes that primary receives in anti entropy
-add creation write for server
-add retirement write fro server

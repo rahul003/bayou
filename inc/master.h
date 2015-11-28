@@ -5,7 +5,10 @@
 #include "string"
 #include "fstream"
 #include "iostream"
+#include "set"
+#include "map"
 #include "unordered_map"
+#include "data_classes.h"
 using namespace std;
 
 void* AcceptConnections(void* _M);
@@ -31,6 +34,11 @@ public:
     void WaitForDone(const int fd);
     void WaitForLogResponse(const int);
     void ProcessAndPrintLog(int id, const string& log);
+    unordered_map<string, int> WaitForVC(int sid);
+
+    void SendChangeConnectionServer(string type, int id, int port);
+    void SendChangeConnectionClient(string type, int id, int port);
+    void StabilizeMode();
 
     void SendPutToClient(int client_id,
                          const string& song_name,
@@ -42,6 +50,9 @@ public:
                             const string& song_name);
 
     void SetCloseExecFlag(const int fd);
+
+    bool is_client_id(int id);
+    bool is_server_id(int id);
 
     int get_master_port();
     int get_master_fd();
@@ -68,9 +79,13 @@ private:
     int master_port_;   // port used by master for communication
     int master_fd_;
 
+    Graph servers_;
+
     int file_num_;
     //map from id given in test to port
     std::unordered_map<int, int> server_listen_port_;
 
 };
+
+
 #endif //MASTER_H_
