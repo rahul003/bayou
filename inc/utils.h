@@ -11,8 +11,8 @@ std::vector<std::string> split(const std::string &s, char delim);
 void CreateThread(void* (*f)(void* ), void* arg, pthread_t &thread);
 int GetPortFromFd(int fd);
 int GetPeerPortFromFd(int fd);
-unordered_map<int, int> StringToUnorderedMap(string str);
-string UnorderedMapToString(unordered_map<int, int>& clock);
+unordered_map<string, int> StringToUnorderedMap(string str);
+string UnorderedMapToString(unordered_map<string, int>& clock);
 
 string ClockToString(unordered_map<string, int>);
 void StringToClock(string m, unordered_map<string, int>& rval);

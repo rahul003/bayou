@@ -84,7 +84,7 @@ int GetPeerPortFromFd(int fd) {
 
     len = sizeof addr;
     if (getpeername(fd, (struct sockaddr*)&addr, &len) == -1) {
-        perror("getsockname");
+        perror("getpeername");
         return -1;
     } else {
         // deal with both IPv4 and IPv6:
@@ -101,24 +101,24 @@ int GetPeerPortFromFd(int fd) {
     }
 }
 
-unordered_map<int, int> StringToUnorderedMap(string str) {
-    // Port,Ts;Port,Ts;Port,ts (delim=kName=!)
-    unordered_map<int, int> ans;
+unordered_map<string, int> StringToUnorderedMap(string str) {
+    // name,Ts;name,Ts;name,ts (delim=kName=!)
+    unordered_map<string, int> ans;
     std::vector<string> tuple = split(str, kSemiColon[0]);
     for (const auto t : tuple) {
-        std::vector<string> entry = split(t, kName[0]);
+        std::vector<string> entry = split(t, kComma[0]);
         D(assert(entry.size() == 2);)
-        ans[stoi(entry[0])] = stoi(entry[1]);
+        ans[entry[0]] = stoi(entry[1]);
     }
     return ans;
 }
 
- string UnorderedMapToString(unordered_map<int, int>& clock) {
-    // Port,Ts;Port,Ts;Port,ts (delim=kName=!)
+ string UnorderedMapToString(unordered_map<string, int>& clock) {
+    // name,Ts;name,Ts;name,ts (delim=kName=!)
     string msg;
     for(auto &s: clock)
     {
-        msg+=to_string(s.first)+kName;
+        msg+=s.first+kComma;
         msg+=to_string(s.second)+kSemiColon;
     }
     msg+=kInternalDelim;

@@ -264,10 +264,10 @@ void Master::SendRetireMessage(int id)
     SendMessageToServer(id, msg);
 }
 
-void Master::SendLogRequest(int id)
+int Master::SendLogRequest(int id)
 {
     string msg = kPrintLog + kInternalDelim + kMessageDelim;
-    SendMessageToServer(id, msg);
+    return SendMessageToServer(id, msg);
 }
 
 int Master::SendToAllServers(const string& msg)
@@ -544,12 +544,10 @@ void Master::CrashServer(const int server_id)
 {
     int pid = all_pids_[server_id];
     if (pid != -1) {
-        // TODO: Think whether SIGKILL or SIGTERM
-        // TODO: If using SIGTERM, consider signal handling in server.cpp
-        // close(get_server_fd(server_id));
         kill(pid, SIGKILL);
         all_pids_.erase(server_id);
         server_fd_.erase(server_id);
+        server_listen_port_.erase(server_id);
         // set_server_fd(server_id, -1);
         // set_server_status(server_id, DEAD);
         D(cout << "M  : Server S" << server_id << " killed" << endl;)
@@ -591,8 +589,8 @@ void Master::ReadTest() {
         {
             int id;
             iss>>id;
-            SendLogRequest(id);
-            WaitForLogResponse(id);
+            if(SendLogRequest(id) !=0 )
+                WaitForLogResponse(id);
         }
         else if(keyword == kPause)
         {

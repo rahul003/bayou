@@ -67,6 +67,7 @@ const string kGet = "get";
 const string kDelete = "delete";
 const string kCreate = "create";
 const string kRetire = "retire";
+const string kNoOp = "noop";
 const string kPrimRetire = "PrimRetire";
 
 const string kPrintLog = "printLog";

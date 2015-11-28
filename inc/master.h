@@ -21,7 +21,7 @@ public:
     void KillAllProcesses();
     int SendToAllServers(const string& msg);
     void WaitForAll(const int num);
-    void SendLogRequest(int id);
+    int SendLogRequest(int id);
 
     int SendMessageToServer(const int server_id, const string & message);
     void SendMessageToClient(const int client_id, const string & message);
@@ -60,13 +60,11 @@ private:
     //to kill when exiting
     std::unordered_map<int, pid_t> all_pids_;
 
-    //coz dynamic we could just use below vector size to know how many
     //id to fd
     std::unordered_map<int, int> server_fd_;
     std::unordered_map<int, int> client_fd_;
     int primary_id_;
 
-    int current_server_port_;
     int master_port_;   // port used by master for communication
     int master_fd_;
 

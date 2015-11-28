@@ -4,9 +4,20 @@ joinServer 1
 put 5 song1 url1
 joinClient 6 1
 get 6 song1
+pause
 put 6 song2 url2
+printLog 0
+printLog 1
+start
 get 5 song2
 get 6 song2
 delete 5 song1
+pause
+get 6 song1
+printLog 0
+printLog 1
+start
 get 6 song1
 get 5 song1
+printLog 0
+printLog 1

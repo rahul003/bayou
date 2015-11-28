@@ -69,6 +69,11 @@ void Client::set_server_fd(const int server_port, const int fd) {
     server_fd_[server_port] = fd;
 }
 
+void Client::RemoveServerFromSets(int server_port) {
+    server_fd_.erase(server_port);
+    connected_servers_.erase(server_port);
+}
+
 void Client::ConstructMessage(const string& type, const string &body, string &message) {
     message = type + kInternalDelim + body + kMessageDelim;
 }
@@ -81,9 +86,12 @@ void Client::SendMessageToMaster(const string & message) {
     }
 }
 
-void Client::SendMessageToServer(const string & message, int fd) {
+void Client::SendMessageToServer(const string & message, int server_port) {
+    int fd = get_server_fd(server_port);
     if (send(fd, message.c_str(), message.size(), 0) == -1) {
         D(cout << "C" << get_pid() << " : ERROR: Cannot send message to S" << endl;)
+        RemoveServerFromSets(server_port);
+        close(fd);
     } else {
         D(cout << "C" << get_pid() << " : Message sent to S" << ": " << message << endl;)
     }
@@ -96,12 +104,13 @@ void Client::SendDoneToMaster() {
 }
 
 /**
- * receives DONE message from someone
- * @param fd fd on which DONE is expected
+ * receives DONE message from server
+ * @param server_port port on which DONE is expected
  */
-void Client::WaitForDone(const int fd) {
+void Client::WaitForDone(const int server_port) {
     char buf[kMaxDataSize];
     int num_bytes;
+    int fd = get_server_fd(server_port);
 
     bool done = false;
     while (!done) { // connection with server has timeout
@@ -110,6 +119,8 @@ void Client::WaitForDone(const int fd) {
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+            RemoveServerFromSets(server_port);
+            close(fd);
             done = true;
         }
         else {
@@ -134,24 +145,27 @@ void Client::WaitForDone(const int fd) {
  * @param argv command line arguments passed by master
  */
 void Client::ConnectToMultipleServers() {
-    for (auto& server_port : connected_servers_) {
+    for (auto it = connected_servers_.begin(); it != connected_servers_.end();) {
+        int server_port = *it;
         if (ConnectToServer(server_port)) {
             D(cout << "C" << get_pid() << " : Connected to S." << endl;)
+
+            // send Iam Client message to server
+            string message;
+            ConstructIAmMessage(kIAm, kClient, message);
+            SendMessageToServer(message, server_port);
+            WaitForDone(server_port);
+            it++;
         }
         else {
             D(cout << "C" << get_pid() << " : ERROR in connecting to S." << endl;)
+            it = connected_servers_.erase(it);
         }
-
-        // send Iam Client message to server
-        string message;
-        ConstructIAmMessage(kIAm, kClient, message);
-        SendMessageToServer(message, get_server_fd(server_port));
-        WaitForDone(get_server_fd(server_port));
     }
 }
 
-void Client::UpdateReadVector(unordered_map<int, int>& rel_writes) {
-    for (auto& e : rel_writes) { // e = <port,clockvalue>
+void Client::UpdateReadVector(unordered_map<string, int>& rel_writes) {
+    for (auto& e : rel_writes) { // e = <name,clockvalue>
         auto it = read_vector_.find(e.first);
         if (it == read_vector_.end()) {
             read_vector_[e.first] = e.second;
@@ -162,9 +176,9 @@ void Client::UpdateReadVector(unordered_map<int, int>& rel_writes) {
     }
 }
 
-bool Client::CheckSessionGuaranteesWrites(unordered_map<int, int>& server_vc) {
+bool Client::CheckSessionGuaranteesWrites(unordered_map<string, int>& server_vc) {
     // Writes-Follow-Reads
-    for (auto& e : read_vector_) { // e = <port,clockvalue>
+    for (auto& e : read_vector_) { // e = <name,clockvalue>
         auto it = server_vc.find(e.first);
         if (it == server_vc.end()) {
             return false;
@@ -176,7 +190,7 @@ bool Client::CheckSessionGuaranteesWrites(unordered_map<int, int>& server_vc) {
     }
 
     // Monotonic-Writes
-    for (auto& e : write_vector_) { // e = <port,clockvalue>
+    for (auto& e : write_vector_) { // e = <name,clockvalue>
         auto it = server_vc.find(e.first);
         if (it == server_vc.end()) {
             return false;
@@ -190,9 +204,9 @@ bool Client::CheckSessionGuaranteesWrites(unordered_map<int, int>& server_vc) {
     return true;
 }
 
-bool Client::CheckSessionGuaranteesReads(unordered_map<int, int>& server_vc) {
+bool Client::CheckSessionGuaranteesReads(unordered_map<string, int>& server_vc) {
     // Monotonic-Writes
-    for (auto& e : read_vector_) { // e = <port,clockvalue>
+    for (auto& e : read_vector_) { // e = <name,clockvalue>
         auto it = server_vc.find(e.first);
         if (it == server_vc.end()) {
             return false;
@@ -204,7 +218,7 @@ bool Client::CheckSessionGuaranteesReads(unordered_map<int, int>& server_vc) {
     }
 
     // Read-Your-Writes
-    for (auto& e : write_vector_) { // e = <port,clockvalue>
+    for (auto& e : write_vector_) { // e = <name,clockvalue>
         auto it = server_vc.find(e.first);
         if (it == server_vc.end()) {
             return false;
@@ -221,16 +235,17 @@ bool Client::CheckSessionGuaranteesReads(unordered_map<int, int>& server_vc) {
 /**
  * sends vector clock request to server
  * receives server's' vector clock
- * @param  fd server's fd
+ * @param  server_port server's port
  * @return    server's vector clock
  */
-unordered_map<int, int> Client::GetServerVectorClock(int fd) {
+unordered_map<string, int> Client::GetServerVectorClock(int server_port) {
+    int fd = get_server_fd(server_port);
     string message = kServerVC + kInternalDelim + kMessageDelim;
-    SendMessageToServer(message, fd);
+    SendMessageToServer(message, server_port);
 
     char buf[kMaxDataSize];
     int num_bytes;
-    unordered_map<int, int> ret;
+    unordered_map<string, int> ret;
 
     bool done = false;
     while (!done) { // connection with server has timeout
@@ -239,8 +254,10 @@ unordered_map<int, int> Client::GetServerVectorClock(int fd) {
             // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
         }
         else if (num_bytes == 0) {   //connection closed
-            D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+            D(cout << "C" << get_pid() << " : ERROR Connection closed by server, fd=" << fd << endl;)
             done = true;
+            RemoveServerFromSets(server_port);
+            close(fd);
         }
         else {
             done = true;
@@ -263,7 +280,8 @@ unordered_map<int, int> Client::GetServerVectorClock(int fd) {
     return ret;
 }
 
-void Client::GetWriteID(int fd) {
+void Client::GetWriteID(int server_port) {
+    int fd = get_server_fd(server_port);
     char buf[kMaxDataSize];
     int num_bytes;
 
@@ -274,7 +292,9 @@ void Client::GetWriteID(int fd) {
             // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
         }
         else if (num_bytes == 0) {   //connection closed
-            D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+            D(cout << "C" << get_pid() << " : ERROR Connection closed by server, fd=" << fd << endl;)
+            RemoveServerFromSets(server_port);
+            close(fd);
             done = true;
         }
         else {
@@ -284,16 +304,16 @@ void Client::GetWriteID(int fd) {
             for (const auto &msg : message) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kWriteID) {
-                    //WRITEID-Port,Ts (delim=kName=!)
+                    //WRITEID-name,Ts (delim=kName=!)
                     D(assert(token.size() == 2);)
 
-                    std::vector<string> entry = split(string(token[1]), kName[0]);
+                    std::vector<string> entry = split(string(token[1]), kComma[0]);
 
                     D(assert(entry.size() == 2));
-                    int port = stoi(entry[0]);
+                    string name = entry[0];
                     int timestamp = stoi(entry[1]);
                     D(cout << "C" << get_pid() << " : WRITEID received: " << token[1] << endl;)
-                    write_vector_[port] = timestamp;
+                    write_vector_[name] = timestamp;
                 } else {
                     D(cout << "C" << get_pid() << " : ERROR Unexpected message received at fd="
                       << fd << ": " << msg << endl;)
@@ -303,7 +323,8 @@ void Client::GetWriteID(int fd) {
     }
 }
 
-string Client::GetResultAndRelWrites(int fd) {
+string Client::GetResultAndRelWrites(int server_port) {
+    int fd = get_server_fd(server_port);
     char buf[kMaxDataSize];
     int num_bytes;
     string url;
@@ -317,6 +338,8 @@ string Client::GetResultAndRelWrites(int fd) {
         else if (num_bytes == 0) {   //connection closed
             D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
             count = 2;
+            RemoveServerFromSets(server_port);
+            close(fd);
         }
         else {
             buf[num_bytes] = '\0';
@@ -330,10 +353,10 @@ string Client::GetResultAndRelWrites(int fd) {
                     url = token[1];
                     count++;
                 } else if (token[0] == kRelWrites) {
-                    //RELWRITES-Port,Ts;Port,Ts;Port,ts
+                    //RELWRITES-name,Ts;name,Ts;name,ts
                     D(assert(token.size() == 2));
                     D(cout << "C" << get_pid() << " : RELWRITES received: " << token[1] << endl;)
-                    unordered_map<int, int> rel_writes = StringToUnorderedMap(token[1]);
+                    unordered_map<string, int> rel_writes = StringToUnorderedMap(token[1]);
                     UpdateReadVector(rel_writes);
                     count++;
                 } else {
@@ -358,11 +381,11 @@ void Client::HandleWriteRequest(string type, string song_name, string url) {
                   song_name + kInternalDelim + kMessageDelim;
 
     for (auto server_port : connected_servers_) {
-        unordered_map<int, int> server_vc =
-            GetServerVectorClock(get_server_fd(server_port));
+        unordered_map<string, int> server_vc =
+            GetServerVectorClock(server_port);
         if (CheckSessionGuaranteesWrites(server_vc)) {
-            SendMessageToServer(message, get_server_fd(server_port));
-            GetWriteID(get_server_fd(server_port));
+            SendMessageToServer(message, server_port);
+            GetWriteID(server_port);
             break;
         } else {
             // do nothing. Just drop the write
@@ -380,12 +403,12 @@ string Client::HandleReadRequest(string song_name) {
                      song_name + kInternalDelim + kMessageDelim;
 
     for (auto server_port : connected_servers_) {
-        unordered_map<int, int> server_vc =
-            GetServerVectorClock(get_server_fd(server_port));
+        unordered_map<string, int> server_vc =
+            GetServerVectorClock(server_port);
         if (CheckSessionGuaranteesReads(server_vc)) {
-            SendMessageToServer(message, get_server_fd(server_port));
+            SendMessageToServer(message, server_port);
             return kUrl + kInternalDelim +
-                   GetResultAndRelWrites(get_server_fd(server_port)) + kInternalDelim + kMessageDelim;
+                   GetResultAndRelWrites(server_port) + kInternalDelim + kMessageDelim;
         } else {
             return kUrl + kInternalDelim + kErrDep + kInternalDelim + kMessageDelim;
         }

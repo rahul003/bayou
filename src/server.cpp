@@ -40,9 +40,11 @@ Server::Server(char** argv)
     if (am_primary_) {
         set_name(kFirst);
         vclock_[name_] = 0;
+    } else {
+        set_name("");
     }
     pause_ = false;
-    max_csn_= 0;
+    max_csn_ = 0;
     retiring_ = UNSET;
 
 }
@@ -50,6 +52,7 @@ Server::Server(char** argv)
 int Server::get_pid() {
     return pid_;
 }
+
 bool Server::get_pause() {
     bool copy;
     pthread_mutex_lock(&pause_lock);
@@ -57,9 +60,11 @@ bool Server::get_pause() {
     pthread_mutex_unlock(&pause_lock);
     return copy;
 }
+
 string Server::get_name() {
     return name_;
 }
+
 int Server::get_my_listen_port() {
     return my_listen_port_;
 }
@@ -98,16 +103,30 @@ RetireStatus Server::get_retiring() {
     return copy;
 }
 
+int Server::get_server_fd_peerport_map(int fd) {
+    int port;
+
+    pthread_mutex_lock(&server_lock);
+    if(server_fd_peerport_map_.find(fd)!=server_fd_peerport_map_.end())
+        port = server_fd_peerport_map_[fd];
+    else
+        port = -1;
+    pthread_mutex_unlock(&server_lock);
+
+    return port;
+}
+
 void Server::set_retiring(RetireStatus s) {
     pthread_mutex_lock(&retiring_lock);
     retiring_ = s;
     pthread_mutex_unlock(&retiring_lock);
 }
+
 void Server::set_pause(bool t)
 {
     pthread_mutex_lock(&pause_lock);
     pause_ = t;
-    pthread_mutex_unlock(&pause_lock);   
+    pthread_mutex_unlock(&pause_lock);
 }
 void Server::set_name(const string& my_name) {
     name_ = my_name;
@@ -131,10 +150,20 @@ void Server::set_client_fd(int port, int fd) {
     client_fd_[port] = fd;
 }
 
+// dont' call this explicitly. It is automatically called when set_server_fd is called
+void Server::set_server_fd_peerport_map(int fd, int peer_port) {
+    pthread_mutex_lock(&server_lock);
+    server_fd_peerport_map_[fd] = peer_port;
+    pthread_mutex_unlock(&server_lock);
+}
+
 void Server::set_server_fd(const string& name, int fd) {
     pthread_mutex_lock(&server_lock);
     server_fd_[name] = fd;
     pthread_mutex_unlock(&server_lock);
+
+    // don't move inside lock since it already has lock
+    set_server_fd_peerport_map(fd, GetPeerPortFromFd(fd));
 }
 
 void Server::set_server_name(int port, const string& name) {
@@ -163,20 +192,45 @@ void Server::RemoveFromMiscFd(int fd) {
     pthread_mutex_unlock(&misc_fd_lock);
 }
 
+void Server::RemoveServer(int port) {
+    string name = get_server_name(port);
+    int fd = get_server_fd(name);
+
+    pthread_mutex_lock(&server_lock);
+    // server_name_.erase(port);
+    server_fd_.erase(name);
+    server_fd_peerport_map_.erase(fd);
+    pthread_mutex_unlock(&server_lock);
+}
+
 void Server::CloseClientConnections()
 {
-    for(auto &c: client_fd_)
+    for (auto &c : client_fd_)
     {
-        close(c.first);
+        close(c.second);
     }
     client_fd_.clear();
+}
+
+void Server::CloseServerAndMiscConnections()
+{
+    for (auto &s : server_fd_)
+    {
+        close(s.second);
+    }
+    // no need to clear server_fd_ as server is going to be killed soon
+    for (auto &m : misc_fd_)
+    {
+        close(m);
+    }
+    // no need to clear misc_fd_ as server is going to be killed soon
 }
 
 void Server::AddRetireWrite()
 {
     vclock_[get_name()]++;
     IdTuple w;
-    if(am_primary_)
+    if (am_primary_)
     {
         max_csn_++;
         w = IdTuple(max_csn_, get_name(), vclock_[get_name()]);
@@ -193,66 +247,68 @@ void* AntiEntropyP1(void* _S) {
     Server* S = (Server*)_S;
     string msg = kAntiEntropyP1 + kInternalDelim + kMessageDelim;
     string cur_server = "";
-    while(true)
+    while (true)
     {
         usleep(kAntiEntropyInterval);
-        if(!S->get_pause())
+        if (!S->get_pause())
         {
             cur_server = S->GetNextServer(cur_server);
-            if(cur_server != "")
-                S->SendMessageToServer(cur_server,msg);
+            if (cur_server != "")
+                S->SendMessageToServer(cur_server, msg);
         }
     }
     return NULL;
 }
 
-string Server::GetWriteLogAsString(){
+string Server::GetWriteLogAsString() {
     string rval;
-    for(auto &entry: write_log_)
+    for (auto &entry : write_log_)
     {
         IdTuple w = entry.first;
         Command c = entry.second;
 
-        if(c.get_type()==kPut)
+        if (c.get_type() == kPut)
         {
-            rval+="PUT:(";
-            rval+=c.get_song()+","+c.get_url()+"):";
-            if(w.get_csn()==INT_MAX)
-                rval+="FALSE";
+            rval += "PUT:(";
+            rval += c.get_song() + "," + c.get_url() + "):";
+            if (w.get_csn() == INT_MAX)
+                rval += "FALSE";
             else
-                rval+="TRUE";
-            rval+=kInternalListDelim;
+                rval += "TRUE";
+            rval += kInternalListDelim;
         }
-        else if(c.get_type()==kDelete)
+        else if (c.get_type() == kDelete)
         {
-            rval+="DELETE:(";
-            rval+=c.get_song()+"):";
-            if(w.get_csn()==INT_MAX)
-                rval+="FALSE";
+            rval += "DELETE:(";
+            rval += c.get_song() + "):";
+            if (w.get_csn() == INT_MAX)
+                rval += "FALSE";
             else
-                rval+="TRUE";
-            rval+=kInternalListDelim;
+                rval += "TRUE";
+            rval += kInternalListDelim;
         }
     }
     return rval;
 }
 
-string Server::GetServerForRetireMessage(){
-    string rval;
+string Server::GetServerForRetireMessage() {
+    string rval = "";
 
     pthread_mutex_lock(&server_lock);
     auto it = server_fd_.begin();
-    rval = it->first;
+    if (it != server_fd_.end())
+        rval = it->first;
     pthread_mutex_unlock(&server_lock);
+
     return rval;
 }
 
-string Server::GetNextServer(string last){
+string Server::GetNextServer(string last) {
     string rval = "";
     pthread_mutex_lock(&server_lock);
-    if(!server_fd_.empty()) {
+    if (!server_fd_.empty()) {
         auto it = server_fd_.upper_bound(last);
-        if(it==server_fd_.end())
+        if (it == server_fd_.end())
             it = server_fd_.begin();
         rval = it->first;
     }
@@ -300,12 +356,9 @@ void Server::CreateFdSet(fd_set& fromset,
             D(cout << "S" << get_pid()
               << " : ERROR Unexpected peek error in server fd for server "
               << it->first << endl;)
+            RemoveServer(get_server_fd_peerport_map(fd_temp));    // takes port as arg
             close(fd_temp);
             it++;
-            // TODO: shoudl I erase it?
-            // if yes, see if locking causes issue
-            // ideally, retirement should take care of removing
-            // this case should never happen
         } else {
             FD_SET(fd_temp, &fromset);
             fd_max = max(fd_max, fd_temp);
@@ -328,7 +381,7 @@ void Server::CreateFdSet(fd_set& fromset,
               << *it << ">" << endl;)
             close(fd_temp);
             it++;
-            // TODO: shoudl I erase it?
+            // TODO: should I erase it?
             // if yes, see if locking causes issue
             // ideally, this case should never happen
         } else {
@@ -341,8 +394,8 @@ void Server::CreateFdSet(fd_set& fromset,
 
     //master_fd
     fd_temp = get_master_fd();
-    FD_SET(fd_temp,&fromset);
-    fd_max = max(fd_max,fd_temp);
+    FD_SET(fd_temp, &fromset);
+    fd_max = max(fd_max, fd_temp);
     fds.push_back(fd_temp);
 }
 
@@ -376,18 +429,15 @@ void Server::ReceiveFromAllMode()
             for (int i = 0; i < fds.size(); i++) {
                 if (FD_ISSET(fds[i], &fromset)) { // we got one!!
                     if ((num_bytes = recv(fds[i], buf, kMaxDataSize - 1, 0)) == -1) {
-                        D(cout << "S" << get_pid()
-                          << ": ERROR in receiving" << endl;)
-
-                        //TODO: What to do here?
-                        // ResetFD(fds[i], primary_id);
-
+                        D(cout << "S" << get_pid() << ": ERROR in receiving" << endl;)
+                        // can only be a server fd
+                        RemoveServer(get_server_fd_peerport_map(fds[i]));
+                        close(fds[i]);
                     } else if (num_bytes == 0) {     //connection closed
                         D(cout << "S" << get_pid() << ": Connection closed" << endl;)
-
-                        //TODO: What to do here?
-                        // ResetFD(fds[i], primary_id);
-
+                        // can only be a server fd
+                        RemoveServer(get_server_fd_peerport_map(fds[i]));
+                        close(fds[i]);
                     } else {
 
                         buf[num_bytes] = '\0';
@@ -399,7 +449,7 @@ void Server::ReceiveFromAllMode()
                                 //IAM-SERVER-SERVER_NAME
                                 //IAM-NEWSERVER
                                 D(assert(token.size() >= 2);)
-                                
+
                                 int port = GetPeerPortFromFd(fds[i]);
                                 if (token[1] == kClient) {
                                     set_client_fd(port, fds[i]);
@@ -415,95 +465,102 @@ void Server::ReceiveFromAllMode()
 
                                 int port = GetPeerPortFromFd(fds[i]);
                                 set_name(token[1]);
-                                std::vector<string> v = split(token[1],kName[0]);
-                                vclock_[name_]=stoi(v.back());
+                                std::vector<string> v = split(token[1], kName[0]);
+                                vclock_[name_] = stoi(v.back());
                                 //first write this server accepts will be with tk+1
                                 set_server_name(port, token[3]);
                                 set_server_fd(token[3], fds[i]);
                                 vclock_[token[3]] = 0;
                                 RemoveFromMiscFd(fds[i]);
-                            } 
-                            else if(token[0] == kAntiEntropyP1)
+                            }
+                            else if (token[0] == kAntiEntropyP1)
                             {
                                 SendAEP1Response(fds[i]);
                             }
-                            else if(token[0] == kAntiEntropyP1Resp)
+                            else if (token[0] == kAntiEntropyP1Resp)
                             {
                                 SendAntiEntropyP2(token, fds[i]);
                             }
-                            else if (token[0]==kRetiring)
-                            { //kretiring-kwasprim-$
-                                if(token[1]==kWasPrim)
+                            else if (token[0] == kRetiring)
+                            {
+                                //kretiring-kwasprim-$
+                                if (token[1] == kWasPrim)
                                 {
                                     am_primary_ = true;
                                     CommitTentativeWrites();
                                 }
-                                vclock_.erase(get_server_name(fds[i]));
+                                // vclock_.erase(get_server_name(fds[i]));
                                 string msg = kAck + kInternalDelim + kMessageDelim;
-                                SendMessageToServerByFd(fds[i],msg);
+                                SendMessageToServerByFd(fds[i], msg);
                             }
-                            else if(token[0]==kAntiEntropyP2)
+                            else if (token[0] == kAntiEntropyP2)
                             {
-                                D(assert(token.size()==3);)
-                                if(!(token[1].empty() && token[2].empty()))
+                                D(assert(token.size() == 3);)
+                                if (!(token[1].empty() && token[2].empty()))
                                     ExtractAEP2Message(token[1], token[2]);
                             }
-                            else if(token[0] == kServerVC)
+                            else if (token[0] == kServerVC)
                             {
-                                unordered_map<int, int> port_to_clock;
+                                unordered_map<string, int> port_to_clock;
                                 CreatePortToClockMap(port_to_clock);
-                                string msg=kServerVC+kInternalDelim;
-                                msg+=UnorderedMapToString(port_to_clock) + kMessageDelim;
-                                SendMessageToClient(fds[i],msg);
+                                string msg = kServerVC + kInternalDelim;
+                                msg += UnorderedMapToString(port_to_clock) + kMessageDelim;
+                                SendMessageToClient(fds[i], msg);
                             }
-                            else if(token[0]==kGet)
+                            else if (token[0] == kGet)
                             {
-                                string msg = kUrl+kInternalDelim;
+                                string msg = kUrl + kInternalDelim;
                                 string url;
-                                if(database_.find(token[1]) == database_.end())
+                                if (database_.find(token[1]) == database_.end())
                                     url = kErrKey;
                                 else
                                     url = database_[token[1]];
-                                msg += url+kInternalDelim+kMessageDelim;
+                                msg += url + kInternalDelim + kMessageDelim;
                                 SendMessageToClient(fds[i], msg);
 
-                                msg = kRelWrites+kInternalDelim;
+                                msg = kRelWrites + kInternalDelim;
                                 msg += GetRelevantWrites(token[1]) + kMessageDelim;
                                 SendMessageToClient(fds[i], msg);
                             }
-                            else if(token[0] == kPut)
+                            else if (token[0] == kPut)
                             {
-                                D(assert(token.size()==3);)
+                                D(assert(token.size() == 3);)
                                 AddWrite(token[0], token[1], token[2]);
                                 SendWriteIdToClient(fds[i]);
                             }
-                            else if(token[0] == kDelete)
+                            else if (token[0] == kDelete)
                             {
-                                D(assert(token.size()==2);)
+                                D(assert(token.size() == 2);)
                                 AddWrite(token[0], token[1], "");
                                 SendWriteIdToClient(fds[i]);
                             }
-                            //originally in master 
                             else if (token[0] == kRetireServer) {
                                 set_retiring(SET);
                                 CloseClientConnections();
                                 AddRetireWrite();
                                 string send_to = GetServerForRetireMessage();
-                                string msg = kAntiEntropyP1 + kInternalDelim + kMessageDelim;
-                                SendMessageToServer(send_to,msg);
-                            } 
-                            else if(token[0]==kPrintLog){
+                                if (send_to != "") {
+                                    string msg = kAntiEntropyP1 + kInternalDelim + kMessageDelim;
+                                    SendMessageToServer(send_to, msg);
+                                }
+                            }
+                            else if (token[0] == kPrintLog) {
                                 string msg = kMyLog + kInternalDelim;
-                                msg += GetWriteLogAsString()+kInternalDelim + kMessageDelim;
+                                msg += GetWriteLogAsString() + kInternalDelim + kMessageDelim;
+
                                 SendMessageToMaster(msg);
                             }
-                            else if(token[0] == kPause)
+                            else if (token[0] == kPause)
                             {
+                                D(cout << "S" << get_pid()
+                                  << " : PAUSE Anti-Entropy" << endl;)
                                 set_pause(true);
                                 SendDoneToMaster();
                             }
-                            else if(token[0] == kStart)
+                            else if (token[0] == kStart)
                             {
+                                D(cout << "S" << get_pid()
+                                  << " : START Anti-Entropy" << endl;)
                                 set_pause(false);
                                 SendDoneToMaster();
                             }
@@ -518,13 +575,14 @@ void Server::ReceiveFromAllMode()
         }
     }
 }
+
 void Server::SendAntiEntropyP2(vector<string>& token, int fd)
 {
     bool was_set = false;
-    if(get_retiring()==SET)
+    if (get_retiring() == SET)
         was_set = true;
-    
-    D(assert(token.size()==3);)
+
+    D(assert(token.size() == 3);)
     int recvd_csn = stoi(token[1]);
     unordered_map<string, int> recvd_clock;
     StringToClock(token[2], recvd_clock);
@@ -532,51 +590,49 @@ void Server::SendAntiEntropyP2(vector<string>& token, int fd)
     ConstructAEP2Message(msg, recvd_csn, recvd_clock);
     SendMessageToServerByFd(fd, msg);
 
-    if(was_set)
+    if (was_set)
     {
         string msg = kRetiring + kInternalDelim;
-        if(am_primary_)
-            msg +=kWasPrim;
-        msg+=kInternalDelim+kMessageDelim;
+        if (am_primary_)
+            msg += kWasPrim;
+        msg += kInternalDelim + kMessageDelim;
         SendMessageToServerByFd(fd, msg);
         WaitForAck(fd);
         set_retiring(DONE);
+        CloseServerAndMiscConnections();
         SendDoneToMaster();
+
+        // dont' go back to receive thread. Die in sleep
+        while(true) {
+            sleep(kGeneralSleep);
+        }
     }
 }
 string Server::GetRelevantWrites(string song)
 {
-    unordered_map<int, int> port_to_ts;
-    for(auto &w: write_log_)
+    unordered_map<string, int> name_to_ts;
+    for (auto &w : write_log_)
     {
-        if(w.second.get_song()==song)
+        if (w.second.get_song() == song)
         {
-            int p;
-            if(w.first.get_sname()==get_name())
-                p = my_listen_port_;
-            else
-                p = GetPeerPortFromFd(get_server_fd(w.first.get_sname()));
-            port_to_ts[p] = w.first.get_accept_ts();
+            name_to_ts[w.first.get_sname()] = w.first.get_accept_ts();
         }
     }
-    
-    return UnorderedMapToString(port_to_ts);
+
+    return UnorderedMapToString(name_to_ts);
 }
 
-void Server::CreatePortToClockMap(unordered_map<int, int>& port_to_clock)
+void Server::CreatePortToClockMap(unordered_map<string, int>& port_to_clock)
 {
-    for(auto &c: vclock_)
+    for (auto &c : vclock_)
     {
-        if(c.first==get_name())
-            port_to_clock[my_listen_port_] = c.second;
-        else
-            port_to_clock[GetPeerPortFromFd(get_server_fd(c.first))] = c.second;
+        port_to_clock[c.first] = c.second;
     }
 }
 void Server::SendWriteIdToClient(int fd)
 {
-    string msg = kWriteID+kInternalDelim;
-    msg += to_string(my_listen_port_) + kName;
+    string msg = kWriteID + kInternalDelim;
+    msg += get_name() + kComma;
     msg += to_string(vclock_[get_name()]) + kInternalDelim + kMessageDelim;
     SendMessageToClient(fd, msg);
 }
@@ -586,7 +642,7 @@ void Server::AddWrite(string type, string song, string url)
     //new writes will have clock from 1
     vclock_[get_name()]++;
     IdTuple w;
-    if(am_primary_)
+    if (am_primary_)
     {
         max_csn_++;
         w = IdTuple(max_csn_, get_name(), vclock_[get_name()]);
@@ -594,20 +650,21 @@ void Server::AddWrite(string type, string song, string url)
     else
         w = IdTuple(INT_MAX, get_name(), vclock_[get_name()]);
 
-    Command c(type,song, url);
+    Command c(type, song, url);
     write_log_[w] = c;
     ExecuteCommandsOnDatabase(w);
 }
 
-void Server::CommitTentativeWrites(){
-    auto it = write_log_.lower_bound(IdTuple(max_csn_+1,"", 0));
+void Server::CommitTentativeWrites() {
+    auto it = write_log_.lower_bound(IdTuple(max_csn_ + 1, "", 0));
     IdTuple first;
     bool first_set = false;
-    while(it!=write_log_.end())
+    std::map<IdTuple, Command> temp;
+    while (it != write_log_.end())
     {
         Command c = it->second;
         IdTuple w = it->first;
-        write_log_.erase(it->first);
+        it = write_log_.erase(it);
         max_csn_++;
         w = IdTuple(max_csn_, w.get_sname(), w.get_accept_ts());
         if (!first_set)
@@ -615,8 +672,13 @@ void Server::CommitTentativeWrites(){
             first = w;
             first_set = true;
         }
-        write_log_[w] = c;
+        temp[w] = c;
     }
+
+    for(auto &e: temp) {
+        write_log_[e.first] = e.second;
+    }
+
     ExecuteCommandsOnDatabase(first);
 }
 
@@ -645,8 +707,11 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
         set_server_name(port, name);
         set_server_fd(name, fd);
 
+        //vc for the server I created
+        vclock_[name] = vclock_[name_];
+
         int temp_csn;
-        if(am_primary_){
+        if (am_primary_) {
             max_csn_++;
             temp_csn = max_csn_;
         } else {
@@ -656,7 +721,7 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
         IdTuple w(temp_csn, name_, vclock_[name_]);
         write_log_[w] = Command(kCreate);
         ExecuteCommandsOnDatabase(w);
-        
+
         //can also set to vclock[name] = vclock[name_]
 
         // send his and my name to peer
@@ -694,7 +759,7 @@ void Server::SendAEP1Response(int fd)
 {
     string msg;
     msg += kAntiEntropyP1Resp + kInternalDelim;
-    msg+=to_string(max_csn_) + kInternalDelim;
+    msg += to_string(max_csn_) + kInternalDelim;
     msg += ClockToString(vclock_) + kInternalDelim + kMessageDelim;
     SendMessageToServerByFd(fd, msg);
 }
@@ -704,29 +769,30 @@ void Server::ConstructAEP2Message(string& msg, const int& r_csn, unordered_map<s
     //AEP2-c1.n1.w1.m1a.m1b.m1c-n1.w1,m1
     //AEP2-commitedwrites-tentativewrites$
     //only this thread will use max_csn no need of lock
-    msg += kAntiEntropyP2+kInternalDelim;
-    string committed,new_tent;
-    if(r_csn<max_csn_)
+    msg += kAntiEntropyP2 + kInternalDelim;
+    string committed, new_tent;
+    if (r_csn < max_csn_)
     {
         //gives first element higher than this
-        auto it = write_log_.lower_bound(IdTuple(r_csn+1,"",0));
-        while(it!=write_log_.end() && it->first.get_csn()<=max_csn_)
-        {  
-            committed+=WriteToString(it->first, it->second)+kComma;
+        auto it = write_log_.lower_bound(IdTuple(r_csn + 1, "", 0));
+        while (it != write_log_.end() && it->first.get_csn() <= max_csn_)
+        {
+            committed += WriteToString(it->first, it->second) + kComma;
             it++;
         }
     }
-    msg+=committed+kInternalDelim;
-    auto it = write_log_.lower_bound(IdTuple(max_csn_+1,"", 0));
-    while(it!=write_log_.end())
+    msg += committed + kInternalDelim;
+    auto it = write_log_.lower_bound(IdTuple(max_csn_ + 1, "", 0));
+    while (it != write_log_.end())
     {
-        if((it->first.get_accept_ts())>(r_clock[it->first.get_sname()]))
+        if(r_clock.find(it->first.get_sname()) == r_clock.end() || 
+            it->first.get_accept_ts() > r_clock[it->first.get_sname()])
         {
-            new_tent+=WriteToString(it->first, it->second)+kComma;
+            new_tent += WriteToString(it->first, it->second) + kComma;
         }
         it++;
     }
-    msg+=new_tent+kInternalDelim + kMessageDelim;
+    msg += new_tent + kInternalDelim + kMessageDelim;
 }
 
 IdTuple Server::RollBack(const string& committed_writes, const string& tent_writes)
@@ -734,31 +800,31 @@ IdTuple Server::RollBack(const string& committed_writes, const string& tent_writ
     IdTuple earliest;
     bool earliest_found = false;
     vector<string> writes, parts;
-    if(!committed_writes.empty()){
+    if (!committed_writes.empty()) {
         writes = split(committed_writes, kComma[0]);
         parts = split(writes[0], kInternalWriteDelim[0]);
-        D(assert(parts.size() >= 5);) // 5 for delete, 6 for put
+        D(assert(parts.size() == 6);) // 5 for delete, 6 for put
         IdTuple cur_first(stoi(parts[0]), parts[1], stoi(parts[2]));
         earliest = cur_first;
         earliest_found = true;
     }
-    if(!tent_writes.empty() && !earliest_found)
+    if (!tent_writes.empty() && !earliest_found)
     {
         writes = split(tent_writes, kComma[0]);
         parts = split(writes[0], kInternalWriteDelim[0]);
-        D(assert(parts.size() >= 5);) // 5 for delete, 6 for put
+        D(assert(parts.size() == 6);) // 5 for delete, 6 for put
         IdTuple cur_first(INT_MAX, parts[1], stoi(parts[2]));
-        
+
         earliest = cur_first;
         earliest_found = true;
     }
-    D(assert(earliest_found==true);)
+    D(assert(earliest_found == true);)
 
-    auto it=write_log_.rbegin();
-    while(it!=write_log_.rend() && it->first>earliest)
-    {   
+    auto it = write_log_.rbegin();
+    while (it != write_log_.rend() && it->first > earliest)
+    {
         string c_type = it->second.get_type();
-        if(c_type==kCreate || c_type==kRetire)
+        if (c_type == kCreate || c_type == kRetire)
         {
             //creation or retire write. has no undo
         }
@@ -769,9 +835,13 @@ IdTuple Server::RollBack(const string& committed_writes, const string& tent_writ
             {
                 database_.erase(undo_c.get_song());
             }
-            else if(undo_c.get_type()==kUndo)
+            else if (undo_c.get_type() == kUndo)
             {
                 database_[undo_c.get_song()] = undo_c.get_url();
+            }
+            else if (undo_c.get_type() == kNoOp)
+            {
+                
             }
             undo_log_.erase(it->first);
         }
@@ -780,45 +850,47 @@ IdTuple Server::RollBack(const string& committed_writes, const string& tent_writ
     return earliest;
 }
 
-void Server::ExtractAEP2Message(const string& committed_writes, const string& tent_writes){
+void Server::ExtractAEP2Message(const string& committed_writes, const string& tent_writes) {
     //AEP2-c1.n1.w1.m1-c1,n1.w1,m1
     //AEP2-commitedwrites-tentativewrites$
     IdTuple from = RollBack(committed_writes, tent_writes);
-    
+
     vector<string> writes = split(committed_writes, kComma[0]);
-    for(auto &p: writes)
+    for (auto &p : writes)
     {
         vector<string> parts = split(p, kInternalWriteDelim[0]);
-        D(assert(parts.size() >= 5);) // 5 for delete, 6 for put
+        D(assert(parts.size() == 6);) // 5 for delete, 6 for put
         IdTuple w(INT_MAX, parts[1], stoi(parts[2]));
-        
+
         // check if this write already present in committed
         IdTuple w_new(stoi(parts[0]), parts[1], stoi(parts[2]));
-        if(write_log_.find(w_new)!=write_log_.end())
+        if (write_log_.find(w_new) != write_log_.end())
             continue;
 
-        if(write_log_.find(w)!=write_log_.end()) {
+        if (write_log_.find(w) != write_log_.end()) {
             write_log_.erase(w);
         }
         Command c(parts[3], parts[4], parts[5]);
         write_log_[w_new] = c;
     }
     writes = split(tent_writes, kComma[0]);
-    for(auto &p: writes)
+
+    if(writes.size())
+        from.set_csn(max_csn_+1);
+    for (auto &p : writes)
     {
         vector<string> parts = split(p, kInternalWriteDelim[0]);
-        D(assert(parts.size() >= 5);) // 5 for delete, 6 for put
+        D(assert(parts.size() == 6);) // 5 for delete, 6 for put
         int temp_csn;
 
         // check if this write already present in committed or tentative
-        if(vclock_[parts[1]] >=  stoi(parts[2]) ) {
+        if (vclock_[parts[1]] >=  stoi(parts[2]) ) {
             continue;
         }
 
-        if(am_primary_) {
+        if (am_primary_) {
             max_csn_++;
             temp_csn = max_csn_;
-            from.set_csn(temp_csn);
         } else {
             temp_csn = INT_MAX;
         }
@@ -833,20 +905,21 @@ void Server::ExtractAEP2Message(const string& committed_writes, const string& te
 
 void Server::ExecuteCommandsOnDatabase(IdTuple from)
 {
-    auto it=write_log_.find(from);
+    auto it = write_log_.find(from);
 
-    while(it!=write_log_.end())
+
+    while (it != write_log_.end())
     {
         IdTuple w = it->first;
         string song = it->second.get_song();
         string url = it->second.get_url();
         string type = it->second.get_type();
-        if (type==kPut)
+        if (type == kPut)
         {
-            if(w.get_csn()==INT_MAX)
+            if (w.get_csn() == INT_MAX)
             {
                 //undo command for a write needed only if tentative
-                if(database_.find(song)==database_.end())
+                if (database_.find(song) == database_.end())
                 {
                     //wasnt in database
                     undo_log_[w] = Command(kDelete, song, "");
@@ -855,80 +928,90 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
                 {
                     //overwritten
                     undo_log_[w] = Command(kUndo, song, database_[song]);
-                }                
+                }
             }
             else
                 max_csn_ = w.get_csn();
             database_[song] = url;
         }
-        else if (type==kDelete)
+        else if (type == kDelete)
         {
             //TODO: what to write in undo log when song does not exist for deletion
-            if(w.get_csn()==INT_MAX)
+            if (w.get_csn() == INT_MAX)
             {
-                undo_log_[w] = Command(kUndo, song, database_[song]);
+                if(database_.find(song) != database_.end())
+                    undo_log_[w] = Command(kUndo, song, database_[song]);
+                else 
+                {
+                    undo_log_[w] = Command(kNoOp);
+                }
             }
             else
                 max_csn_ = w.get_csn();
             database_.erase(song);
         }
-        else if(type==kCreate)
+        else if (type == kCreate)
         {
-            string name = w.get_sname()+kName+to_string(w.get_accept_ts());
-            vclock_[name] = 0;
-            if(w.get_csn()!=INT_MAX)
+            string name = w.get_sname() + kName + to_string(w.get_accept_ts());
+            // vclock_[name] = 0;
+            if (w.get_csn() != INT_MAX)
                 max_csn_ = w.get_csn();
         }
-        else if(type==kRetire)
+        else if (type == kRetire)
         {
-            vclock_.erase(w.get_sname());
-            if(w.get_csn()!=INT_MAX)
+            // vclock_.erase(w.get_sname());
+            if (w.get_csn() != INT_MAX)
                 max_csn_ = w.get_csn();
         }
-        
-        //updating vector clock if behind. it will be behind for new writes
-        int s_clock = CompleteV(w.get_sname());
-        if(s_clock==INT_MIN)
-        {   //not seen creation write
-            //below is effectively seeing creation write.
-            //actually i think it will first see the creation write definitely
+
+        D(assert(vclock_[w.get_sname()] <= w.get_accept_ts());)
+
+        // required for writes sent by others
+        if (vclock_[w.get_sname()] < w.get_accept_ts())
             vclock_[w.get_sname()] = w.get_accept_ts();
-        }
-        else if(s_clock<INT_MAX)
-        {   
-            if(vclock_[w.get_sname()]<w.get_accept_ts())
-                vclock_[w.get_sname()] = w.get_accept_ts();            
-        }    
-        else
-        {
-            D(cout<<"WTF. Shouldnt happen"<<endl;)
-            //retired. and i know it.
-        }
+
+        //updating vector clock if behind. it will be behind for new writes
+        // int s_clock = CompleteV(w.get_sname());
+        // if (s_clock == INT_MIN)
+        // {   //not seen creation write
+        //     //below is effectively seeing creation write.
+        //     //actually i think it will first see the creation write definitely
+        //     vclock_[w.get_sname()] = w.get_accept_ts();
+        // }
+        // else if (s_clock < INT_MAX)
+        // {
+        //     if (vclock_[w.get_sname()] < w.get_accept_ts())
+        //         vclock_[w.get_sname()] = w.get_accept_ts();
+        // }
+        // else
+        // {
+        //     //retired. and i know it.
+        // }
 
         it++;
     }
-    
+
 }
 
-int Server::CompleteV(string s)
-{
-    if(vclock_.find(s)!=vclock_.end())
-    {
-        return vclock_[s];
-    }
-    if(s==kFirst)
-    {   
-        return INT_MAX;
-    }
-    vector<string> sub_name = split(s, kName[0]);
-    D(assert(sub_name.size()>=2);)
-    string last = sub_name[sub_name.size()-1];
-    string second_last = sub_name[sub_name.size()-2];
-    if(CompleteV(last)>=stoi(second_last))
-        return INT_MAX;
-    else
-        return INT_MIN;
-}
+// int Server::CompleteV(string s)
+// {
+//     if (vclock_.find(s) != vclock_.end())
+//     {
+//         return vclock_[s];
+//     }
+//     if (s == kFirst)
+//     {
+//         return INT_MAX;
+//     }
+//     vector<string> sub_name = split(s, kName[0]);
+//     D(assert(sub_name.size() >= 2);)
+//     string last = sub_name[sub_name.size() - 1];
+//     string second_last = sub_name[sub_name.size() - 2];
+//     if (CompleteV(second_last) >= stoi(last))
+//         return INT_MAX;
+//     else
+//         return INT_MIN;
+// }
 
 void Server::WaitForAck(int fd)
 {
@@ -938,10 +1021,12 @@ void Server::WaitForAck(int fd)
     bool ack = false;
     while (!ack) {     // connection with server has timeout
         if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-            // D(cout << "M  : ERROR in receiving ack from someone, fd=" << fd << endl;)
+            // D(cout << "S" << get_pid()
+            //     << " : ERROR in receiving ACK, fd=" << fd << endl;)
         }
         else if (num_bytes == 0) {   //connection closed
-            D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
+            D(cout << "S" << get_pid()
+              << " : ERROR Connection closed by server while waiting for ACK, fd=" << fd << endl;)
         }
         else {
             buf[num_bytes] = '\0';
@@ -950,10 +1035,10 @@ void Server::WaitForAck(int fd)
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kAck) {
                     ack = true;
-                    D(cout << "S  "<<get_name()<<": ACK received" << endl;)
+                    D(cout << "S" << get_pid() << " : ACK received" << endl;)
                 } else {
-                    D(cout << "S  "<<get_name()<<": Unexpected message received at fd="
-                      << fd << ": " << msg << endl;)
+                    // D(cout << "S" << get_pid() << " : ERROR Unexpected message received at fd="
+                    //   << fd << ": " << msg << endl;)
                 }
             }
         }
@@ -963,14 +1048,19 @@ void Server::WaitForAck(int fd)
 void Server::SendMessageToServerByFd(int fd, const string & message) {
     if (send(fd, message.c_str(), message.size(), 0) == -1) {
         D(cout << "S" << get_pid() << " : ERROR: Cannot send message to S" << endl;)
+        RemoveServer(get_server_fd_peerport_map(fd));
+        close(fd);
     } else {
         D(cout << "S" << get_pid() << " : Message sent to S: " << message << endl;)
     }
 }
 
 void Server::SendMessageToServer(const string& name, const string & message) {
-    if (send(get_server_fd(name), message.c_str(), message.size(), 0) == -1) {
+    int fd = get_server_fd(name);
+    if (send(fd, message.c_str(), message.size(), 0) == -1) {
         D(cout << "S" << get_pid() << " : ERROR: Cannot send message to server " << name << endl;)
+        RemoveServer(get_server_fd_peerport_map(fd));
+        close(fd);
     } else {
         D(cout << "S" << get_pid() << " : Message sent to server " << name << ": " << message << endl;)
     }
@@ -1044,6 +1134,11 @@ void Server::ConnectToAllServers(char** argv) {
         }
 
         i++;
+    }
+
+    // sleeps till it gets a name from some other server.
+    while(get_name() == "") {
+        usleep(kBusyWaitSleep);
     }
 }
 
@@ -1120,7 +1215,7 @@ int main(int argc, char *argv[]) {
     S.SendDoneToMaster();
 
     void* status;
-    pthread_join(anti_entropy_p1_thread, &status);   
+    pthread_join(anti_entropy_p1_thread, &status);
     pthread_join(accept_connections_thread, &status);
     pthread_join(receive_from_all_thread, &status);
     return 0;

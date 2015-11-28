@@ -23,17 +23,17 @@ public:
     Server(char**);
     void SendOrAskName(int fd);
     string CreateName();
-    void CreatePortToClockMap(unordered_map<int, int>& port_to_clock);
-    string GetRelevantWrites(string song);
+    void CreatePortToClockMap(unordered_map<string, int>& port_to_clock);
     void CommitTentativeWrites();
-    
+
     bool ConnectToServer(const int port);
     void ConnectToAllServers(char** argv);
     bool ConnectToMaster();
-    int CompleteV(string);
+    // int CompleteV(string);
     void ReceiveFromAllMode();
-    void SendRetiringMsgToServer(int);
+    void RemoveServer(int port);
 
+    void SendRetiringMsgToServer(int);
     void SendMessageToServer(const string&, const string &);
     void SendMessageToServerByFd(int , const string &);
     void SendMessageToMaster(const string & message);
@@ -41,15 +41,15 @@ public:
     void SendDoneToClient(int fd);
     void SendDoneToMaster();
     void SendWriteIdToClient(int);
+    void SendAEP1Response(int fd);
+    void SendAntiEntropyP2(vector<string>& token, int fd);
 
     void AddWrite(string type, string song, string url);
-    void SendAntiEntropyP2(vector<string>& token, int fd);
     string GetWriteLogAsString();
-
     string GetNextServer(string);
     string GetServerForRetireMessage();
+    string GetRelevantWrites(string song);
 
-    void SendAEP1Response(int fd);
 
     void InitializeLocks();
     void EstablishMasterCommunication();
@@ -71,6 +71,7 @@ public:
     void ExecuteCommandsOnDatabase(IdTuple from);
     IdTuple RollBack(const string& committed_writes, const string& tent_writes);
     void CloseClientConnections();
+    void CloseServerAndMiscConnections();
     void AddRetireWrite();
     void WaitForAck(int);
 
@@ -86,6 +87,7 @@ public:
     void set_retiring();
     int get_misc_fd(int port);
     RetireStatus get_retiring();
+    int get_server_fd_peerport_map(int fd);
 
     void set_retiring(RetireStatus);
     void set_pause(bool);
@@ -96,6 +98,7 @@ public:
     void set_master_fd(int);
     void set_my_listen_port(int port);
     void set_misc_fd(int fd);
+    void set_server_fd_peerport_map(int fd, int peer_port);
 
 private:
     int pid_;// server's ID. DONT use this for server_listen_port/server_fd
@@ -108,15 +111,15 @@ private:
 
     int master_fd_;
 
-    //maps port to name
-    std::unordered_map<int, string> server_name_;
+    std::unordered_map<int, string> server_name_;    //maps port to name
     std::map<string, int> server_fd_;
-    std::unordered_map<int, int> client_fd_; // hash of fd to port
+    std::unordered_map<int, int> server_fd_peerport_map_; //hash of fd to peer port
+    std::unordered_map<int, int> client_fd_; // hash of port to fd
     std::unordered_set<int> misc_fd_; // set of fds whose origin is not known yet
 
     std::unordered_map<string, int> vclock_;
     int max_csn_;
-    
+
     std::unordered_map<string, string> database_;
     std::map<IdTuple, Command> write_log_;
     std::map<IdTuple, Command> undo_log_;
