@@ -9,11 +9,12 @@ const int kMaxDataSize = 2000 ;          // max number of bytes we can get at on
 const int kBacklog = 20;                // how many pending connections queue will hold
 
 const int kMasterPort = 22222;
-const string kPrimary = "P";    // primary server's name
+const string kFirst = "F";    // first server's name
 
-// file paths``
+// file paths
 const string kServerExecutable = "./bin/server";
 const string kClientExecutable = "./bin/client";
+const string kLogFileName = "./log/log_";
 
 // message templates
 const string kMessageDelim = "$";
@@ -39,7 +40,7 @@ const string kAntiEntropyP2 = "AEP2";
 const string kRetiring = "RETIRING";
 const string kAck = "ACK";
 const string kWasPrim = "WASPRIM";
-
+const string kMyLog = "MYLOG";
 const string kServer = "SERVER";
 const string kClient = "CLIENT";
 const string kServerVC = "SERVERVC";
@@ -64,7 +65,11 @@ const string kPut = "put";
 const string kUndo = "undo";
 const string kGet = "get";
 const string kDelete = "delete";
+const string kCreate = "create";
+const string kRetire = "retire";
+const string kPrimRetire = "PrimRetire";
 
+const string kPrintLog = "printLog";
 const string kStabilize = "stabilize";
 const string kPause = "pause";
 const string kStart = "start";

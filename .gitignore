@@ -6,3 +6,4 @@ client
 tests/mytest.test
 src/test.cpp
 src/a.out
+log/*

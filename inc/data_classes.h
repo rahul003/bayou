@@ -33,6 +33,7 @@ public:
 	Command(string, string, string);
 	Command(string, string);
 	Command();
+	Command(string);
 	string as_string();
 	string get_type();
 	string get_song();

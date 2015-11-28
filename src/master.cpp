@@ -33,6 +33,7 @@ extern char **environ;
 Master::Master() {
     primary_id_ = -1;
     master_port_ = kMasterPort;
+    file_num_ = 0;
 }
 
 int Master::get_master_port() {
@@ -259,10 +260,25 @@ bool Master::SpawnClient(const int client_id, const int server_id) {
 
 void Master::SendRetireMessage(int id)
 {
-    string msg = kRetireServer + kMessageDelim;
+    string msg = kRetireServer + kInternalDelim+ kMessageDelim;
     SendMessageToServer(id, msg);
 }
 
+void Master::SendLogRequest(int id)
+{
+    string msg = kPrintLog + kInternalDelim + kMessageDelim;
+    SendMessageToServer(id, msg);
+}
+
+int Master::SendToAllServers(const string& msg)
+{
+    int c=0;
+    for(auto &s : server_fd_)
+    {
+        c = c+SendMessageToServer(s.first, msg);
+    }
+    return c;
+}
 /**
  * receives DONE message from someone
  * @param fd fd on which DONE is expected
@@ -281,12 +297,12 @@ void Master::WaitForDone(const int fd) {
             done = true;
         }
         else {
+            done = true;
             buf[num_bytes] = '\0';
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kDone) {
-                    done = true;
                     D(cout << "M  : DONE received" << endl;)
                 } else {
                     D(cout << "M  : Unexpected message received at fd="
@@ -297,6 +313,57 @@ void Master::WaitForDone(const int fd) {
     }
 }
 
+void Master::WaitForAll(const int num) {
+    int c=0;
+    for(auto &s: server_fd_)
+    {
+        WaitForDone(s.second);
+        c++;
+    }
+    D(assert(c==num);)
+}
+
+void Master::WaitForLogResponse(const int server_id) {
+    char buf[kMaxDataSize];
+    int num_bytes;
+
+    bool done = false;
+    while (!done) {     // connection with server has timeout
+        if ((num_bytes = recv(get_server_fd(server_id), buf, kMaxDataSize - 1, 0)) == -1) {
+            // D(cout << "M  : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "M  : ERROR Connection closed by server S:" << server_id << endl;)
+            done = true;
+        }
+        else {
+            done = true;
+            buf[num_bytes] = '\0';
+            std::vector<string> message = split(string(buf), kMessageDelim[0]);
+            for (const auto &msg : message) {
+                std::vector<string> token = split(string(msg), kInternalDelim[0]);
+                if (token[0] == kMyLog) {
+                    D(assert(token.size() == 2);)
+                    D(cout << "M  : WriteLog received" << endl;)
+                    ProcessAndPrintLog(server_id, token[1]);
+                } else {
+                    D(cout << "M  : Unexpected message received by server S:"
+                      << server_id << ": " << msg << endl;)
+                }
+            }
+        }
+    }
+}
+void Master::ProcessAndPrintLog(int id, const string& log)
+{
+    vector<string> writes = split(log,kInternalListDelim[0]);
+    fstream f((kLogFileName + to_string(file_num_)+","+to_string(id)), fstream::out);
+    for(auto&w: writes)
+        f << w << endl;
+    f << "----------------"<<endl;
+    f.close();
+    file_num_++;
+}
 /**
  * receives port num from someone. Sets appropriate listen_port variable
  * @param fd fd on which port num is expected
@@ -444,11 +511,13 @@ void Master::SendMessageToClient(const int client_id, const string & message) {
  * @param server_id id of server to which message needs to be sent
  * @param message   message to be sent
  */
-void Master::SendMessageToServer(const int server_id, const string & message) {
+int Master::SendMessageToServer(const int server_id, const string & message) {
     if (send(get_server_fd(server_id), message.c_str(), message.size(), 0) == -1) {
         D(cout << "M  : ERROR: Cannot send message to S" << server_id << endl;)
+        return 0;
     } else {
         D(cout << "M  : Message sent to S" << server_id << ": " << message << endl;)
+        return 1;
     }
 }
 
@@ -480,6 +549,7 @@ void Master::CrashServer(const int server_id)
         // close(get_server_fd(server_id));
         kill(pid, SIGKILL);
         all_pids_.erase(server_id);
+        server_fd_.erase(server_id);
         // set_server_fd(server_id, -1);
         // set_server_status(server_id, DEAD);
         D(cout << "M  : Server S" << server_id << " killed" << endl;)
@@ -516,6 +586,25 @@ void Master::ReadTest() {
             SendRetireMessage(id);
             WaitForDone(get_server_fd(id));
             CrashServer(id);
+        }
+        else if(keyword == kPrintLog)
+        {
+            int id;
+            iss>>id;
+            SendLogRequest(id);
+            WaitForLogResponse(id);
+        }
+        else if(keyword == kPause)
+        {
+            string msg = kPause + kInternalDelim + kMessageDelim;
+            int num = SendToAllServers(msg);
+            WaitForAll(num);
+        }
+        else if(keyword == kStart)
+        {
+            string msg = kStart + kInternalDelim + kMessageDelim;
+            int num = SendToAllServers(msg);
+            WaitForAll(num);
         }
         else if (keyword == kJoinClient) {
             int cid, sid;

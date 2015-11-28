@@ -1,4 +1,4 @@
-all: bin/master bin/server bin/client
+all: bin/master bin/server bin/client clean-log
 
 # master related
 bin/master: bin/master.o bin/master-socket.o bin/utils.o bin/data_classes.o
@@ -36,6 +36,9 @@ bin/utils.o: src/utils.cpp inc/utils.h inc/constants.h inc/data_classes.h
 
 bin/data_classes.o: src/data_classes.cpp inc/data_classes.h inc/constants.h
 	g++ -g -std=c++0x -c src/data_classes.cpp -o bin/data_classes.o
+
+clean-log:
+	rm -f log/*
 
 clean:
 	rm -f bin/*

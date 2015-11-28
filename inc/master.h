@@ -19,12 +19,19 @@ public:
     void CrashServer(const int);
     bool SpawnClient(const int c_id, const int s_id);
     void KillAllProcesses();
-    void SendMessageToServer(const int server_id, const string & message);
+    int SendToAllServers(const string& msg);
+    void WaitForAll(const int num);
+    void SendLogRequest(int id);
+
+    int SendMessageToServer(const int server_id, const string & message);
     void SendMessageToClient(const int client_id, const string & message);
     void SendRetireMessage(int id);
     void ConstructMessage(const string& type, const string &body, string &message);
     void WaitForPortMessage(const int fd);
     void WaitForDone(const int fd);
+    void WaitForLogResponse(const int);
+    void ProcessAndPrintLog(int id, const string& log);
+
     void SendPutToClient(int client_id,
                          const string& song_name,
                          const string& url);
@@ -54,6 +61,7 @@ private:
     std::unordered_map<int, pid_t> all_pids_;
 
     //coz dynamic we could just use below vector size to know how many
+    //id to fd
     std::unordered_map<int, int> server_fd_;
     std::unordered_map<int, int> client_fd_;
     int primary_id_;
@@ -62,6 +70,7 @@ private:
     int master_port_;   // port used by master for communication
     int master_fd_;
 
+    int file_num_;
     //map from id given in test to port
     std::unordered_map<int, int> server_listen_port_;
 
