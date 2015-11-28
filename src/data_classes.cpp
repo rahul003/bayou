@@ -1,6 +1,7 @@
 #include "../inc/data_classes.h"
 #include "../inc/constants.h"
-
+#include "unordered_map"
+#include "stack"
 IdTuple::IdTuple(int csn, string sname, int ts)
 {
     csn_ = csn;
@@ -100,4 +101,68 @@ string Command::get_song(){
 }
 string Command::get_url(){
     return url_;
+}
+/////////////////////////////////////////////////////
+Graph::Graph(){
+
+}
+void Graph::AddNode(int id){
+    //add this node to every node already in graph
+    //add vector with every node in graph to map
+    set<int> new_set;
+    for(auto &node: adj_)
+    {
+        new_set.insert(node.first);            
+        node.second.insert(id);
+    }
+    adj_[id] = new_set;
+}
+void Graph::RemoveNode(int id){
+    adj_.erase(id);
+    for(auto &n: adj_)
+    {
+        n.second.erase(id);
+    }
+}
+void Graph::RemoveEdge(int id1, int id2){       
+    adj_[id1].erase(id2);
+    adj_[id2].erase(id1);
+}
+void Graph::AddEdge(int id1, int id2){
+    adj_[id1].insert(id2);
+    adj_[id2].insert(id1);
+}
+set<set<int> > Graph::GetConnectedComponents(){
+    set<set<int> > rval;
+    //initialize visited map
+    unordered_map<int, bool> visited;
+    for(auto &n : adj_)
+    {
+        visited[n.first] = false;
+    }
+    stack<int> to_explore;
+
+    for(auto &n: visited)
+    {   
+        if(n.second)
+            continue; //already visited
+
+        set<int> one_comp;
+        to_explore.push(n.first);
+        while(!to_explore.empty())
+        {
+            int cur = to_explore.top();
+            to_explore.pop();
+            visited[cur] = true;
+            one_comp.insert(cur);
+            for (auto &neighb : adj_[cur])
+            {
+                if(!visited[neighb])
+                    to_explore.push(neighb);
+            }
+        }
+        rval.insert(one_comp);
+    }        
+
+    return rval;
 }

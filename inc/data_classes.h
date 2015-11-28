@@ -1,6 +1,7 @@
 #ifndef DATA_CLS_H
 #define DATA_CLS_H
 #include "string"
+#include "set"
 #include "map"
 using namespace std;
 
@@ -27,7 +28,6 @@ private:
 	int accept_ts_;
 };
 
-
 class Command{
 public:
 	Command(string, string, string);
@@ -42,6 +42,20 @@ private:
 	string type_;
 	string song_; 
 	string url_; 
+};
+
+
+class Graph{
+public:
+	Graph();
+    void AddNode(int);
+    void RemoveNode(int);
+    void RemoveEdge(int, int);
+    void AddEdge(int, int);
+	set<set<int> > GetConnectedComponents();
+
+private:
+    std::map<int, set<int> > adj_;
 };
 
 
