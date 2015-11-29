@@ -20,12 +20,20 @@
 #include "pthread.h"
 using namespace std;
 
-#define DEBUG
+// #define DEBUG
 
 #ifdef DEBUG
 #  define D(x) x
 #else
 #  define D(x)
+#endif // DEBUG
+
+#define SUBMISSION
+
+#ifdef SUBMISSION
+#  define S(x) x
+#else
+#  define S(x)
 #endif // DEBUG
 
 extern char **environ;
@@ -373,11 +381,13 @@ void Master::WaitForLogResponse(const int server_id) {
 void Master::ProcessAndPrintLog(int id, const string& log)
 {
     vector<string> writes = split(log,kInternalListDelim[0]);
-    fstream f((kLogFileName + to_string(file_num_)+","+to_string(id)), fstream::out);
-    for(auto&w: writes)
-        f << w << endl;
-    f << "----------------"<<endl;
-    f.close();
+    // fstream f((kLogFileName + to_string(file_num_)+","+to_string(id)), fstream::out);
+    for(auto&w: writes) {
+        D(f << w << endl;)
+        S(cout<< w << endl;)
+    }
+    // D(f << "----------------"<<endl;)
+    // f.close();
     file_num_++;
 }
 /**
@@ -461,6 +471,7 @@ void Master::GetUrlFromClient(const int fd) {
                 D(assert(token.size() == 2);)
                 D(cout << "M  : URL received from C"
                   << " : " << token[1] << endl;)
+                S(cout<<token[1]<<endl;)
             } else {
                 D(cout << "M  : Unexpected message received from C"
                   << ": " << msg << endl;)
@@ -690,6 +701,7 @@ void Master::ReadTest() {
             int cid;
             string song_name;
             iss >> cid >> song_name;
+            S(cout<<song_name<<":";)
             SendGetToClient(cid, song_name);
         } else if (keyword == kDelete) {
             int cid;

@@ -40,5 +40,5 @@ bin/data_classes.o: src/data_classes.cpp inc/data_classes.h inc/constants.h
 clean-log:
 	rm -f log/*
 
-clean:
+clean: clean-log
 	rm -f bin/*

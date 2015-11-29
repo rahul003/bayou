@@ -18,7 +18,3 @@ printLog 1
 printLog 2
 printLog 3
 printLog 4
-
-
-//fails monotonic writes guarantee as song1 might not have yet propogated to server 2
-//if stabilize is added before put 10 song2 url2, then both get committed

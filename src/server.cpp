@@ -17,7 +17,7 @@
 
 using namespace std;
 
-#define DEBUG
+// #define DEBUG
 
 #ifdef DEBUG
 #  define D(x) x
@@ -280,7 +280,7 @@ string Server::GetWriteLogAsString() {
         if (c.get_type() == kPut)
         {
             rval += "PUT:(";
-            rval += c.get_song() + "," + c.get_url() + "):";
+            rval += c.get_song() + ", " + c.get_url() + "):";
             if (w.get_csn() == INT_MAX)
                 rval += "FALSE";
             else

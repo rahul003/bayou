@@ -1,0 +1,5 @@
+PUT:(song1, url1):TRUE
+PUT:(song1, url1):TRUE
+PUT:(song2, url2):FALSE
+PUT:(song1, url1):TRUE
+PUT:(song1, url1):TRUE

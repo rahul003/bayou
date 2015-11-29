@@ -1,0 +1,18 @@
+PUT:(song1, url1):TRUE
+PUT:(song2, url2):TRUE
+PUT:(song1, url1):TRUE
+PUT:(song2, url2):TRUE
+PUT:(song3, url3):FALSE
+PUT:(song4, url4):FALSE
+PUT:(song3, url3):FALSE
+PUT:(song4, url4):FALSE
+PUT:(song1, url1):TRUE
+PUT:(song2, url2):TRUE
+DELETE:(song2):TRUE
+PUT:(song1, url1):TRUE
+PUT:(song2, url2):TRUE
+DELETE:(song1):FALSE
+PUT:(song3, url3):FALSE
+PUT:(song4, url4):FALSE
+PUT:(song3, url3):FALSE
+PUT:(song4, url4):FALSE
