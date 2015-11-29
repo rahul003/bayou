@@ -204,7 +204,7 @@ void Server::RemoveServer(int port) {
         return;
 
     pthread_mutex_lock(&server_lock);
-    // server_name_.erase(port);
+    server_name_.erase(port);
     server_fd_.erase(name);
     server_fd_peerport_map_.erase(fd);
     pthread_mutex_unlock(&server_lock);
@@ -326,6 +326,34 @@ string Server::GetNextServer(string last) {
     return rval;
 }
 
+void Server::BreakConnectionWithServer(const string& name) {
+    if(name == "") {
+        D(cout << "S" << get_pid() 
+            << " : ERROR Invalid name for BreakConnection "<< name << endl;)
+        return;
+    }
+
+    int fd = get_server_fd(name);
+    if(fd == -1) {
+        D(cout << "S" << get_pid() 
+            << " : ERROR Unexpected empty fd for BreakConnection with "<< name << endl;)
+        return;
+    }
+
+    close(fd);
+
+    int port = -1;
+    pthread_mutex_lock(&server_lock);
+    for(auto& e: server_name_) {
+        if(name == e.second) {
+            port = e.first;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&server_lock);
+    RemoveServer(port);
+}
+
 void Server::CreateFdSet(fd_set& fromset,
                          vector<int>& fds,
                          int& fd_max) {
@@ -347,7 +375,7 @@ void Server::CreateFdSet(fd_set& fromset,
         if (rv == 0 || errno == EBADF || errno == ENOTCONN) {
             close(fd_temp);
             D(cout << "S" << get_pid()
-              << " : ERROR Unexpected peek error in client fd for client "
+              << " : Peek error in client fd for client "
               << it->first << endl;)
             it = client_fd_.erase(it);
             //ideally this should never happen
@@ -370,7 +398,7 @@ void Server::CreateFdSet(fd_set& fromset,
         int rv = recv(fd_temp, &buf, kMaxDataSize-1, MSG_DONTWAIT | MSG_PEEK);
         if (rv == 0 || errno == EBADF || errno == ENOTCONN) {
             D(cout << "S" << get_pid()
-              << " : peek error in server fd for server "
+              << " : Peek error in server fd for server "
               << it->first << endl;)
             RemoveServer(get_server_fd_peerport_map(fd_temp));    // takes port as arg
             close(fd_temp);
@@ -440,7 +468,7 @@ void Server::ReceiveFromAllMode()
         CreateFdSet(fromset, fds, fd_max);
 
         if (fd_max == INT_MIN) {
-            D(cout << "S" << get_pid() << ": ERROR Unexpected fd_set empty" << endl;)
+            D(cout << "S" << get_pid() << " : ERROR Unexpected fd_set empty" << endl;)
             usleep(kBusyWaitSleep);
             continue;
         }
@@ -450,7 +478,7 @@ void Server::ReceiveFromAllMode()
         int rv = select(fd_max + 1, &fromset, NULL, NULL, &timeout);
         if (rv == -1) { //error in select
             D(cout << "S" << get_pid()
-              << ": ERROR in select() errno=" << errno
+              << " : ERROR in select() errno=" << errno
               << " fdmax=" << fd_max << endl;)
         } else 
         if (rv == 0) {
@@ -459,12 +487,12 @@ void Server::ReceiveFromAllMode()
             for (int i = 0; i < fds.size(); i++) {
                 if (FD_ISSET(fds[i], &fromset)) { // we got one!!
                     if ((num_bytes = recv(fds[i], buf, kMaxDataSize - 1, 0)) == -1) {
-                        D(cout << "S" << get_pid() << ": ERROR in receiving" << endl;)
+                        D(cout << "S" << get_pid() << " : ERROR in receiving" << endl;)
                         // can only be a server fd
                         RemoveServer(get_server_fd_peerport_map(fds[i]));
                         close(fds[i]);
                     } else if (num_bytes == 0) {     //connection closed
-                        D(cout << "S" << get_pid() << ": Connection closed" << endl;)
+                        D(cout << "S" << get_pid() << " : Connection closed" << endl;)
                         // can only be a server fd
                         RemoveServer(get_server_fd_peerport_map(fds[i]));
                         close(fds[i]);
@@ -613,8 +641,12 @@ void Server::ReceiveFromAllMode()
                                   << " : START Anti-Entropy" << endl;)
                                 set_pause(false);
                                 SendDoneToMaster();
-                            }
-                            else {    //other messages
+                            } else if(token[0] == kBreakConnection) {
+                                //BREAK-name
+                                D(assert(token.size() == 2));
+                                BreakConnectionWithServer(token[1]);
+                                SendDoneToMaster();
+                            } else {    //other messages
                                 D(cout << "S" << get_pid()
                                   << " : ERROR Unexpected message received: " << msg << endl;)
                             }
@@ -1178,11 +1210,12 @@ void Server::SendDoneToMaster() {
     SendMessageToMaster(message);
 }
 
-void Server::ConstructPortMessage(string & message) {
+void Server::ConstructPortAndNameMessage(string & message) {
     message = kPort + kInternalDelim +
               kServer + kInternalDelim +
               to_string(get_pid()) + kInternalDelim +
-              to_string(get_my_listen_port()) + kInternalDelim + kMessageDelim;
+              to_string(get_my_listen_port()) + kInternalDelim +
+              get_name() + kInternalDelim + kMessageDelim;
 }
 
 void Server::ConstructMessage(const string & type, const string & body, string & message) {
@@ -1233,10 +1266,6 @@ void Server::EstablishMasterCommunication() {
     if (!ConnectToMaster()) {
         D(cout << "S" << get_pid() << " : ERROR in connecting to M" << endl;)
     }
-    // send port to master
-    string message;
-    ConstructPortMessage(message);
-    SendMessageToMaster(message);
 }
 
 /**
@@ -1296,7 +1325,15 @@ int main(int argc, char *argv[]) {
                    anti_entropy_p1_thread);
 
     S.ConnectToAllServers(argv);
-    S.SendDoneToMaster();
+
+    // send port and name to master
+    string message;
+    S.ConstructPortAndNameMessage(message);
+    S.SendMessageToMaster(message);
+
+    // don't send done. Master uses port message as ACK.
+    // DONE might cause issue with two threads receiving at same fd
+    // C.SendDoneToMaster();
 
     void* status;
     pthread_join(anti_entropy_p1_thread, &status);

@@ -24,6 +24,7 @@ public:
                              string &message);
 
     void EstablishMasterCommunication();
+    void BreakConnectionWithServer(int port);
     void WaitForDone(const int server_port);
 
     void HandleWriteRequest(string type, string song_name, string url = "");

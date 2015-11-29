@@ -65,7 +65,7 @@ public:
 
     void ConstructIAmMessage(const string&, const string &, const string& , string &);
     void ConstructMessage(const string&, const string& , string &);
-    void ConstructPortMessage(string & message);
+    void ConstructPortAndNameMessage(string & message);
     void ConstructAEP2Message(string& msg, const int& r_csn, unordered_map<string, int>& r_clock);
     void ExtractAEP2Message(const string&, const string&);
     void ExecuteCommandsOnDatabase(IdTuple from);
@@ -74,7 +74,7 @@ public:
     void CloseServerAndMiscConnections();
     void AddRetireWrite();
     void WaitForAck(int);
-
+    void BreakConnectionWithServer(const string& name);
 
     int get_pid();
     string get_name();

@@ -69,6 +69,13 @@ int Master::get_num_servers() {
     return server_listen_port_.size();
 }
 
+string Master::get_server_name(int server_id) {
+    if(server_name_.find(server_id) != server_name_.end())
+        return server_name_[server_id];
+    else
+        return "";
+}
+
 void Master::set_primary_id(const int id) {
     primary_id_ = id;
 }
@@ -85,6 +92,10 @@ void Master::set_client_fd(const int client_id, const int fd) {
 
 void Master::set_server_listen_port(const int server_id, const int port_num) {
     server_listen_port_[server_id] = port_num;
+}
+
+void Master::set_server_name(int server_id, const string& name) {
+    server_name_[server_id] = name;
 }
 
 void Master::SetCloseExecFlag(const int fd) {
@@ -175,10 +186,12 @@ bool Master::SpawnServer(const int server_id, bool isPrimary) {
         return false;
     }
 
-    while (get_server_fd(server_id) == -1) {
+    while (get_server_fd(server_id) == -1 || get_server_name(server_id) == "") {
         usleep(kBusyWaitSleep);
     }
-    WaitForDone(get_server_fd(server_id));
+    // don't wait for done. uses port message as ACK.
+    // DONE might cause issue with two threads receiving at same fd
+    // WaitForDone(get_server_fd(server_id));
     return true;
 }
 
@@ -254,7 +267,10 @@ bool Master::SpawnClient(const int client_id, const int server_id) {
     while (get_client_fd(client_id) == -1) {
         usleep(kBusyWaitSleep);
     }
-    WaitForDone(get_client_fd(client_id));
+
+    // don't wait for done. use IamClient as ACK.
+    // DONE might cause issue with two threads receiving at same fd
+    // WaitForDone(get_client_fd(client_id));
     return true;
 }
 
@@ -386,16 +402,18 @@ void Master::WaitForPortMessage(const int fd) {
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
-                // PORT-SERVER-ID-PORT_NUM
+                // PORT-SERVER-ID-PORT_NUM-Servername
                 // or IAM-CLIENT-ID
                 if (token[0] == kPort) {
-                    D(assert(token.size() == 4);)
+                    D(assert(token.size() == 5);)
                     if (token[1] == kServer) {
                         int server_id = stoi(token[2]);
                         int port_num = stoi(token[3]);
+                        string server_name = token[4];
                         D(cout << "M  : PORT received from S" << server_id << endl;)
                         set_server_listen_port(server_id, port_num);
                         set_server_fd(server_id, fd);
+                        set_server_name(server_id, server_name);
                     } else {
                         D(cout << "M  : Unexpected message received at fd="
                           << fd << ": " << msg << endl;)
@@ -536,10 +554,10 @@ void Master::KillAllProcesses() {
     }
 }
 
-void Master::SendChangeConnectionServer(string type, int id, int port){
+void Master::SendChangeConnectionServer(const string& type, int id, const string& name){
 
     string msg = type + kInternalDelim;
-    msg += to_string(port) + kInternalDelim + kMessageDelim;
+    msg += name + kInternalDelim + kMessageDelim;
     SendMessageToServer(id, msg);
     WaitForDone(get_server_fd(id));
 }
@@ -564,8 +582,7 @@ void Master::CrashServer(const int server_id)
         all_pids_.erase(server_id);
         server_fd_.erase(server_id);
         server_listen_port_.erase(server_id);
-        // set_server_fd(server_id, -1);
-        // set_server_status(server_id, DEAD);
+        server_name_.erase(server_id);
         D(cout << "M  : Server S" << server_id << " killed" << endl;)
     }
 }
@@ -609,18 +626,15 @@ void Master::ReadTest() {
 
             if(is_client_id(id1) && is_server_id(id2))
             {
-                // SendChangeConnectionServer(kBreakConnection, id2, client_listen_port_[id1]);
                 SendChangeConnectionClient(kBreakConnection, id1, server_listen_port_[id2]);
             }
             if(is_server_id(id1) && is_client_id(id2))
             {
-                // SendChangeConnectionServer(kBreakConnection, id1, client_listen_port_[id2]);
                 SendChangeConnectionClient(kBreakConnection, id2, server_listen_port_[id1]);
             }
             if(is_server_id(id1) && is_server_id(id2))
             {
-                SendChangeConnectionServer(kBreakConnection, id1, server_listen_port_[id2]);
-                // SendChangeConnectionServer(kBreakConnection, id2, server_listen_port_[id1]);
+                SendChangeConnectionServer(kBreakConnection, id1, server_name_[id2]);
                 servers_.RemoveEdge(id1, id2);
             }  
         }else if(keyword == kRestoreConnection){
@@ -640,7 +654,7 @@ void Master::ReadTest() {
             if(is_server_id(id1) && is_server_id(id2))
             {
                 //any1 is good enough
-                SendChangeConnectionServer(kRestoreConnection, id1, server_listen_port_[id2]);
+                SendChangeConnectionServer(kRestoreConnection, id1, server_name_[id2]);
                 // SendChangeConnectionServer(kRestoreConnection, id2, server_listen_port_[id1]);
                 servers_.AddEdge(id1, id2);
             }  

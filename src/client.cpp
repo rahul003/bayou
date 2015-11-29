@@ -424,6 +424,19 @@ string Client::HandleReadRequest(string song_name) {
     return "";
 }
 
+void Client::BreakConnectionWithServer(int port) {
+    if(connected_servers_.find(port) != connected_servers_.end() &&
+        server_fd_.find(port) != server_fd_.end()) {
+        
+        connected_servers_.erase(port);
+        close(server_fd_[port]);
+        server_fd_.erase(port);
+    } else {
+        D(cout << "C" << get_pid() 
+            << " : ERROR Invalid port for BreakConnection" << port << endl;)
+    }
+}
+
 void* ReceiveFromMaster(void* _C) {
     Client* C = (Client*)_C;
     char buf[kMaxDataSize];
@@ -456,6 +469,11 @@ void* ReceiveFromMaster(void* _C) {
                     D(assert(token.size() == 2));
                     string url = C->HandleReadRequest(token[1]);
                     C->SendMessageToMaster(url);
+                } else if(token[0] == kBreakConnection) {
+                    //BREAK-port
+                    D(assert(token.size() == 2));
+                    C->BreakConnectionWithServer(stoi(token[1]));
+                    C->SendDoneToMaster();
                 } else {    //other messages
                     D(cout << "C" << C->get_pid()
                       << " : ERROR Unexpected message received from M: "
@@ -482,10 +500,7 @@ void Client::EstablishMasterCommunication() {
     if (!ConnectToMaster()) {
         D(cout << "C" << get_pid() << " : ERROR in connecting to M" << endl;)
     }
-    // send Iam Client message to master
-    string message;
-    ConstructIAmMessage(kIAm, kClient, message);
-    SendMessageToMaster(message);
+
 }
 
 int main(int argc, char *argv[]) {
@@ -498,7 +513,14 @@ int main(int argc, char *argv[]) {
     CreateThread(ReceiveFromMaster, (void*)&C, receive_from_master_thread);
 
     C.ConnectToMultipleServers();
-    C.SendDoneToMaster();
+
+    // send Iam Client message to master
+    string message;
+    C.ConstructIAmMessage(kIAm, kClient, message);
+    C.SendMessageToMaster(message);
+    // don't send done. Master uses IamClient as ACK.
+    // DONE might cause issue with two threads receiving at same fd
+    // C.SendDoneToMaster();
 
 
     void *status;

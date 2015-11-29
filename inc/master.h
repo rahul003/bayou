@@ -36,7 +36,7 @@ public:
     void ProcessAndPrintLog(int id, const string& log);
     string WaitForVC(int sid);
 
-    void SendChangeConnectionServer(string type, int id, int port);
+    void SendChangeConnectionServer(const string& type, int id, const string& name);
     void SendChangeConnectionClient(string type, int id, int port);
     void StabilizeMode();
 
@@ -61,11 +61,13 @@ public:
     int get_server_fd(const int server_id);
     int get_client_fd(const int client_id);
     int get_primary_id();
+    string get_server_name(int server_id);
 
     void set_server_fd(const int server_id, const int fd);
     void set_client_fd(const int client_id, const int fd);
     void set_primary_id(const int primary_id);
     void set_server_listen_port(const int server_id, const int port_num);
+    void set_server_name(int server_id, const string& name);
 
 private:
     //to kill when exiting
@@ -75,6 +77,9 @@ private:
     std::unordered_map<int, int> server_fd_;
     std::unordered_map<int, int> client_fd_;
     int primary_id_;
+
+    // id to name
+    std::unordered_map<int, string> server_name_;
 
     int master_port_;   // port used by master for communication
     int master_fd_;
