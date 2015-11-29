@@ -157,7 +157,7 @@ void* AcceptConnections(void* _S) {
  * @param port port of server whose server to connect to
  * @return  true if connection was successfull
  */
-bool Server::ConnectToServer(const int port) {
+bool Server::ConnectToServer(const int port, bool reconnect) {
 
     int numbytes, sockfd;
     struct addrinfo hints, *l, *servinfo;
@@ -202,6 +202,10 @@ bool Server::ConnectToServer(const int port) {
     }
     freeaddrinfo(servinfo); // all done with this structure
     set_misc_fd(sockfd);
-    SendOrAskName(sockfd);
+
+    if(!reconnect)
+        SendOrAskName(sockfd);
+    else
+        ResendName(sockfd);
     return true;
 }

@@ -36,7 +36,7 @@ public:
     void ProcessAndPrintLog(int id, const string& log);
     string WaitForVC(int sid);
 
-    void SendChangeConnectionServer(const string& type, int id, const string& name);
+    void SendChangeConnectionServer(const string& type, int id, const string& name, int port=-1);
     void SendChangeConnectionClient(string type, int id, int port);
     void StabilizeMode();
 

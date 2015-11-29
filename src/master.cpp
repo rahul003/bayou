@@ -554,12 +554,17 @@ void Master::KillAllProcesses() {
     }
 }
 
-void Master::SendChangeConnectionServer(const string& type, int id, const string& name){
+void Master::SendChangeConnectionServer(const string& type, int id, const string& name, int port){
 
     string msg = type + kInternalDelim;
-    msg += name + kInternalDelim + kMessageDelim;
+    if(port == -1) { //breakconnection
+        msg += name + kInternalDelim + kMessageDelim;
+    } else { // restoreConnection
+        msg += name + kInternalDelim + to_string(port) + kInternalDelim+ kMessageDelim;
+    }
     SendMessageToServer(id, msg);
     WaitForDone(get_server_fd(id));
+
 }
 
 void Master::SendChangeConnectionClient(string type, int id, int port){
@@ -640,22 +645,19 @@ void Master::ReadTest() {
         }else if(keyword == kRestoreConnection){
             int id1, id2;
             iss>> id1 >> id2;
-            //to make things simple, restore is sent to client only if a client is part of the pair
+            //to make things simple, restore is only sent to client if a client is part of the pair
             if(is_client_id(id1) && is_server_id(id2))
             {
-                // SendChangeConnectionServer(kRestoreConnection, id2, client_listen_port_[id1]);
                 SendChangeConnectionClient(kRestoreConnection, id1, server_listen_port_[id2]);
             }
             if(is_server_id(id1) && is_client_id(id2))
             {
-                // SendChangeConnectionServer(kRestoreConnection, id1, client_listen_port_[id2]);
                 SendChangeConnectionClient(kRestoreConnection, id2, server_listen_port_[id1]);
             }
             if(is_server_id(id1) && is_server_id(id2))
             {
-                //any1 is good enough
-                SendChangeConnectionServer(kRestoreConnection, id1, server_name_[id2]);
-                // SendChangeConnectionServer(kRestoreConnection, id2, server_listen_port_[id1]);
+                //anyone is good enough
+                SendChangeConnectionServer(kRestoreConnection, id1, server_name_[id2], server_listen_port_[id2]);
                 servers_.AddEdge(id1, id2);
             }  
         }else if (keyword == kStabilize){

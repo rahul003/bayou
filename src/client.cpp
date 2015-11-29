@@ -179,6 +179,17 @@ void Client::UpdateReadVector(unordered_map<string, int>& rel_writes) {
 }
 
 bool Client::CheckSessionGuaranteesWrites(unordered_map<string, int>& server_vc) {
+    // cout<<"READ SET"<<endl;
+    // for (auto& e : read_vector_) { // e = <name,clockvalue>
+    //     cout<<e.first<<","<<e.second;
+    // }
+
+    // cout<<"----------"<<endl;
+    // cout<<"WRITE SET"<<endl;
+    // for (auto& e : write_vector_) { // e = <name,clockvalue>
+    //     cout<<e.first<<","<<e.second;
+    // }
+
     // Writes-Follow-Reads
     for (auto& e : read_vector_) { // e = <name,clockvalue>
         auto it = server_vc.find(e.first);
@@ -437,6 +448,21 @@ void Client::BreakConnectionWithServer(int port) {
     }
 }
 
+void Client::RestoreConnectionWithServer(int port) {
+    if (ConnectToServer(port)) {
+        D(cout << "C" << get_pid() << " : Connected to S." << endl;)
+
+        // send Iam Client message to server
+        string message;
+        ConstructIAmMessage(kIAm, kClient, message);
+        SendMessageToServer(message, port);
+        WaitForDone(port);
+        connected_servers_.insert(port);
+    } else {
+        D(cout << "C" << get_pid() << " : ERROR in connecting to S." << endl;)
+    }
+}
+
 void* ReceiveFromMaster(void* _C) {
     Client* C = (Client*)_C;
     char buf[kMaxDataSize];
@@ -474,7 +500,12 @@ void* ReceiveFromMaster(void* _C) {
                     D(assert(token.size() == 2));
                     C->BreakConnectionWithServer(stoi(token[1]));
                     C->SendDoneToMaster();
-                } else {    //other messages
+                } else if(token[0] == kRestoreConnection) {
+                    //RESTORE-port
+                    D(assert(token.size() == 2));
+                    C->RestoreConnectionWithServer(stoi(token[1]));
+                    C->SendDoneToMaster();
+                }else {    //other messages
                     D(cout << "C" << C->get_pid()
                       << " : ERROR Unexpected message received from M: "
                       << msg << endl;)

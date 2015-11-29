@@ -1,0 +1,24 @@
+joinServer 1
+joinServer 2
+joinServer 3
+joinServer 4
+joinClient 10 1
+joinClient 20 2
+joinClient 30 3
+joinClient 40 4
+breakConnection 1 2
+breakConnection 10 1
+restoreConnection 10 1
+put 10 song1 url1
+breakConnection 10 1
+restoreConnection 10 2
+stabilize
+put 10 song2 url2
+printLog 1
+printLog 2
+printLog 3
+printLog 4
+
+
+//fails monotonic writes guarantee as song1 might not have yet propogated to server 2
+//if stabilize is added before put 10 song2 url2, then both get committed

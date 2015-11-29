@@ -354,6 +354,19 @@ void Server::BreakConnectionWithServer(const string& name) {
     RemoveServer(port);
 }
 
+void Server::RestoreConnectionWithServer(const string& name, int port) {
+    if (ConnectToServer(port, true)) {
+        D(cout << "S" << get_pid()
+          << " : Re-connected to server "
+          << name << endl;)
+    }
+    else {
+        D(cout << "S" << get_pid()
+          << " : ERROR in connecting to server "
+          << name << endl;)
+    }
+}
+
 void Server::CreateFdSet(fd_set& fromset,
                          vector<int>& fds,
                          int& fd_max) {
@@ -506,6 +519,7 @@ void Server::ReceiveFromAllMode()
                                 //IAM-CLIENT
                                 //IAM-SERVER-SERVER_NAME
                                 //IAM-NEWSERVER
+                                //IAM-RECONNECTINGp1
                                 D(assert(token.size() >= 2);)
 
                                 int port = GetPeerPortFromFd(fds[i]);
@@ -520,12 +534,29 @@ void Server::ReceiveFromAllMode()
                                     D(assert(token.size() == 3);)
                                     set_server_name(port, token[2]);
                                     set_server_fd(token[2], fds[i]);
+                                    RemoveFromMiscFd(fds[i]);
                                     
                                     // I may already have entry for this server in my VC
                                     // see comment in ExecuteCommandOnDatabase function at the end
                                     // near VC update line
                                     if (vclock_.find(token[2]) == vclock_.end())
                                         vclock_[token[2]] = 0;
+                                } else if(token[1] == kReconnectingP1) {
+                                    D(assert(token.size() == 3);)
+                                    set_server_name(port, token[2]);
+                                    set_server_fd(token[2], fds[i]);
+                                    RemoveFromMiscFd(fds[i]);
+
+                                    string message;
+                                    ConstructIAmMessage(kIAm, kReconnectingP2, get_name() + kInternalDelim, message);
+                                    SendMessageToServer(token[2], message);
+                                } else if(token[1] == kReconnectingP2) {
+                                    D(assert(token.size() == 3);)
+                                    set_server_name(port, token[2]);
+                                    set_server_fd(token[2], fds[i]);
+                                    RemoveFromMiscFd(fds[i]);
+                                    // send done to master who is waiting for restoreconnection to complete
+                                    SendDoneToMaster();
                                 }
                             } else if (token[0] == kYouAre) {
                                 //YOUARE-MY_NAME-IAM-SERVER-PEERNAME
@@ -646,7 +677,12 @@ void Server::ReceiveFromAllMode()
                                 D(assert(token.size() == 2));
                                 BreakConnectionWithServer(token[1]);
                                 SendDoneToMaster();
-                            } else {    //other messages
+                            } else if(token[0] == kRestoreConnection) {
+                                //RESTORE-name-port
+                                D(assert(token.size() == 3));
+                                RestoreConnectionWithServer(token[1], stoi(token[2]));
+                            }
+                            else {    //other messages
                                 D(cout << "S" << get_pid()
                                   << " : ERROR Unexpected message received: " << msg << endl;)
                             }
@@ -840,6 +876,13 @@ void Server::SendOrAskName(int fd) {
         SendMessageToServerByFd(fd, msg);
     }
 }
+
+void Server::ResendName(int fd) {
+    string msg;
+    ConstructIAmMessage(kIAm, kReconnectingP1, get_name() + kInternalDelim, msg);
+    SendMessageToServerByFd(fd, msg);
+}
+
 
 void Server::SendAEP1Response(int fd)
 {

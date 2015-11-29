@@ -1,3 +1,3 @@
-kill -SIGTERM $(pidof master)
-kill -SIGTERM $(pidof client)
-kill -SIGTERM $(pidof server)
+kill -9 $(pidof master)
+kill -9 $(pidof client)
+kill -9 $(pidof server)

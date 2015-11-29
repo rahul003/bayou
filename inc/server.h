@@ -22,11 +22,12 @@ class Server {
 public:
     Server(char**);
     void SendOrAskName(int fd);
+    void ResendName(int fd);
     string CreateName();
     void CreatePortToClockMap(unordered_map<string, int>& port_to_clock);
     void CommitTentativeWrites();
 
-    bool ConnectToServer(const int port);
+    bool ConnectToServer(const int port, bool reconnect = false);
     void ConnectToAllServers(char** argv);
     bool ConnectToMaster();
     // int CompleteV(string);
@@ -75,6 +76,7 @@ public:
     void AddRetireWrite();
     void WaitForAck(int);
     void BreakConnectionWithServer(const string& name);
+    void RestoreConnectionWithServer(const string& name, int port);
 
     int get_pid();
     string get_name();
