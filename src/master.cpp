@@ -381,13 +381,13 @@ void Master::WaitForLogResponse(const int server_id) {
 void Master::ProcessAndPrintLog(int id, const string& log)
 {
     vector<string> writes = split(log,kInternalListDelim[0]);
-    fstream f((kLogFileName + to_string(file_num_)+","+to_string(id)), fstream::out);
+    D(fstream f((kLogFileName + to_string(file_num_)+","+to_string(id)), fstream::out);)
     for(auto&w: writes) {
         D(f << w << endl;)
         S(cout<< w << endl;)
     }
     D(f << "----------------"<<endl;)
-    f.close();
+    D(f.close();)
     file_num_++;
 }
 /**
