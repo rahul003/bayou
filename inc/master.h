@@ -34,7 +34,7 @@ public:
     void WaitForDone(const int fd);
     void WaitForLogResponse(const int);
     void ProcessAndPrintLog(int id, const string& log);
-    unordered_map<string, int> WaitForVC(int sid);
+    string WaitForVC(int sid);
 
     void SendChangeConnectionServer(string type, int id, int port);
     void SendChangeConnectionClient(string type, int id, int port);

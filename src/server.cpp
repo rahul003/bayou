@@ -39,13 +39,14 @@ Server::Server(char** argv)
 
     if (am_primary_) {
         set_name(kFirst);
-        vclock_[name_] = 0;
+        vclock_[get_name()] = 0;
     } else {
         set_name("");
     }
     pause_ = false;
     max_csn_ = 0;
     retiring_ = UNSET;
+    master_fd_ = -1;
 
 }
 
@@ -193,8 +194,14 @@ void Server::RemoveFromMiscFd(int fd) {
 }
 
 void Server::RemoveServer(int port) {
+    if(port == -1)
+        return;
     string name = get_server_name(port);
+    if(name == "")
+        return;
     int fd = get_server_fd(name);
+    if(fd == -1)
+        return;
 
     pthread_mutex_lock(&server_lock);
     // server_name_.erase(port);
@@ -249,6 +256,9 @@ void* AntiEntropyP1(void* _S) {
     string cur_server = "";
     while (true)
     {
+        if(S->get_retiring()) {
+            return NULL;
+        }
         usleep(kAntiEntropyInterval);
         if (!S->get_pause())
         {
@@ -321,7 +331,7 @@ void Server::CreateFdSet(fd_set& fromset,
                          int& fd_max) {
 
     fd_max = INT_MIN;
-    char buf;
+    char buf[kMaxDataSize];
     int fd_temp;
     FD_ZERO(&fromset);
     fds.clear();
@@ -332,10 +342,15 @@ void Server::CreateFdSet(fd_set& fromset,
         if (fd_temp == -1) {
             continue;
         }
-        int rv = recv(fd_temp, &buf, 1, MSG_DONTWAIT | MSG_PEEK);
-        if (rv == 0) {
+        errno = 0;
+        int rv = recv(fd_temp, &buf, kMaxDataSize-1, MSG_DONTWAIT | MSG_PEEK);
+        if (rv == 0 || errno == EBADF || errno == ENOTCONN) {
             close(fd_temp);
+            D(cout << "S" << get_pid()
+              << " : ERROR Unexpected peek error in client fd for client "
+              << it->first << endl;)
             it = client_fd_.erase(it);
+            //ideally this should never happen
         } else {
             FD_SET(fd_temp, &fromset);
             fd_max = max(fd_max, fd_temp);
@@ -351,10 +366,11 @@ void Server::CreateFdSet(fd_set& fromset,
         if (fd_temp == -1) {
             continue;
         }
-        int rv = recv(fd_temp, &buf, 1, MSG_DONTWAIT | MSG_PEEK);
-        if (rv == 0) {
+        errno = 0;
+        int rv = recv(fd_temp, &buf, kMaxDataSize-1, MSG_DONTWAIT | MSG_PEEK);
+        if (rv == 0 || errno == EBADF || errno == ENOTCONN) {
             D(cout << "S" << get_pid()
-              << " : ERROR Unexpected peek error in server fd for server "
+              << " : peek error in server fd for server "
               << it->first << endl;)
             RemoveServer(get_server_fd_peerport_map(fd_temp));    // takes port as arg
             close(fd_temp);
@@ -374,15 +390,15 @@ void Server::CreateFdSet(fd_set& fromset,
         if (fd_temp == -1) {
             continue;
         }
-        int rv = recv(fd_temp, &buf, 1, MSG_DONTWAIT | MSG_PEEK);
-        if (rv == 0) {
+        errno = 0;
+        int rv = recv(fd_temp, &buf, kMaxDataSize-1, MSG_DONTWAIT | MSG_PEEK);
+        if (rv == 0 || errno == EBADF || errno == ENOTCONN) {
             D(cout << "S" << get_pid()
               << " : ERROR Unexpected peek error in misc fd="
-              << *it << ">" << endl;)
+              << *it << endl;)
             close(fd_temp);
+            RemoveFromMiscFd(fd_temp);
             it++;
-            // TODO: should I erase it?
-            // if yes, see if locking causes issue
             // ideally, this case should never happen
         } else {
             FD_SET(fd_temp, &fromset);
@@ -394,9 +410,21 @@ void Server::CreateFdSet(fd_set& fromset,
 
     //master_fd
     fd_temp = get_master_fd();
-    FD_SET(fd_temp, &fromset);
-    fd_max = max(fd_max, fd_temp);
-    fds.push_back(fd_temp);
+    if (fd_temp != -1) {
+        errno = 0;
+        int rv = recv(fd_temp, &buf, kMaxDataSize-1, MSG_DONTWAIT | MSG_PEEK);
+        if (rv == 0 || errno == EBADF || errno == ENOTCONN) {
+            D(cout << "S" << get_pid()
+              << " : ERROR Unexpected peek error in master fd=" << endl;)
+            close(fd_temp);
+            set_master_fd(-1);
+            // ideally, this case should never happen
+        } else {
+            FD_SET(fd_temp, &fromset);
+            fd_max = max(fd_max, fd_temp);
+            fds.push_back(fd_temp);
+        }
+    }
 }
 
 void Server::ReceiveFromAllMode()
@@ -417,13 +445,15 @@ void Server::ReceiveFromAllMode()
             continue;
         }
 
+
         struct timeval timeout = kSelectTimeoutTimeval;
         int rv = select(fd_max + 1, &fromset, NULL, NULL, &timeout);
         if (rv == -1) { //error in select
             D(cout << "S" << get_pid()
               << ": ERROR in select() errno=" << errno
               << " fdmax=" << fd_max << endl;)
-        } else if (rv == 0) {
+        } else 
+        if (rv == 0) {
             // D(cout << "S" << get_pid() << ": Select timeout" << endl;)
         } else {
             for (int i = 0; i < fds.size(); i++) {
@@ -455,22 +485,32 @@ void Server::ReceiveFromAllMode()
                                     set_client_fd(port, fds[i]);
                                     RemoveFromMiscFd(fds[i]);
                                     SendDoneToClient(fds[i]);
-                                } else if (token[1] == kServer || token[1] == kNewServer) {
+                                } else if (token[1] == kServerP1 || token[1] == kNewServer) {
                                     HandleInitialServerHandshake(port, fds[i], token);
                                     RemoveFromMiscFd(fds[i]);
+                                } else if(token[1] == kServerP2) {
+                                    D(assert(token.size() == 3);)
+                                    set_server_name(port, token[2]);
+                                    set_server_fd(token[2], fds[i]);
+                                    
+                                    // I may already have entry for this server in my VC
+                                    // see comment in ExecuteCommandOnDatabase function at the end
+                                    // near VC update line
+                                    if (vclock_.find(token[2]) == vclock_.end())
+                                        vclock_[token[2]] = 0;
                                 }
                             } else if (token[0] == kYouAre) {
-                                //YOUARE-MY_NAME-IAM-PEERNAME
-                                D(assert(token.size() == 4);)
+                                //YOUARE-MY_NAME-IAM-SERVER-PEERNAME
+                                D(assert(token.size() == 5);)
 
                                 int port = GetPeerPortFromFd(fds[i]);
                                 set_name(token[1]);
                                 std::vector<string> v = split(token[1], kName[0]);
-                                vclock_[name_] = stoi(v.back());
+                                vclock_[get_name()] = stoi(v.back());
                                 //first write this server accepts will be with tk+1
-                                set_server_name(port, token[3]);
-                                set_server_fd(token[3], fds[i]);
-                                vclock_[token[3]] = 0;
+                                set_server_name(port, token[4]);
+                                set_server_fd(token[4], fds[i]);
+                                vclock_[token[4]] = 0;
                                 RemoveFromMiscFd(fds[i]);
                             }
                             else if (token[0] == kAntiEntropyP1)
@@ -501,11 +541,21 @@ void Server::ReceiveFromAllMode()
                             }
                             else if (token[0] == kServerVC)
                             {
+                                //SERVERVC-CLIENT
+                                //SERVERVC-MASTER
+                                D(assert(token.size() == 2);)
                                 unordered_map<string, int> port_to_clock;
                                 CreatePortToClockMap(port_to_clock);
                                 string msg = kServerVC + kInternalDelim;
-                                msg += UnorderedMapToString(port_to_clock) + kMessageDelim;
-                                SendMessageToClient(fds[i], msg);
+                                msg += UnorderedMapToString(port_to_clock);
+                                if(token[1] == kClient) {
+                                    msg += kMessageDelim;
+                                    SendMessageToClient(fds[i], msg);
+                                }
+                                else if(token[1] == kMaster) {
+                                    msg += to_string(max_csn_) + kInternalDelim + kMessageDelim;
+                                    SendMessageToMaster(msg);
+                                }
                             }
                             else if (token[0] == kGet)
                             {
@@ -581,7 +631,6 @@ void Server::SendAntiEntropyP2(vector<string>& token, int fd)
     bool was_set = false;
     if (get_retiring() == SET)
         was_set = true;
-
     D(assert(token.size() == 3);)
     int recvd_csn = stoi(token[1]);
     unordered_map<string, int> recvd_clock;
@@ -690,25 +739,30 @@ void* ReceiveFromAll(void* _S) {
 
 void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<string>& token) {
     // token[0] is kIAm
-    if (token[1] == kServer) {  // sending server already has name
+    if (token[1] == kServerP1) {  // sending server already has name
         //IAM-SERVER-SERVER_NAME
         D(assert(token.size() == 3);)
         set_server_name(port, token[2]);
         set_server_fd(token[2], fd);
-        vclock_[token[2]] = 0;
+
+        // I may already have entry for this server in my VC
+        // see comment in ExecuteCommandOnDatabase function at the end
+        // near VC update line
+        if(vclock_.find(token[2]) == vclock_.end())
+            vclock_[token[2]] = 0;
 
         string message;
-        ConstructMessage(kIAm, get_name() + kInternalDelim, message);
+        ConstructIAmMessage(kIAm, kServerP2, get_name() + kInternalDelim, message);
         SendMessageToServer(token[2], message);
 
     } else if (token[1] == kNewServer) {    // sending server is new. Does not have a name
-        vclock_[name_]++;
+        vclock_[get_name()]++;
         string name = CreateName();
         set_server_name(port, name);
         set_server_fd(name, fd);
 
         //vc for the server I created
-        vclock_[name] = vclock_[name_];
+        vclock_[name] = vclock_[get_name()];
 
         int temp_csn;
         if (am_primary_) {
@@ -718,7 +772,7 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
             temp_csn = INT_MAX;
         }
 
-        IdTuple w(temp_csn, name_, vclock_[name_]);
+        IdTuple w(temp_csn, get_name(), vclock_[get_name()]);
         write_log_[w] = Command(kCreate);
         ExecuteCommandsOnDatabase(w);
 
@@ -728,7 +782,7 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
         string you_are_msg;
         string i_am_msg;
         ConstructMessage(kYouAre, name + kInternalDelim, you_are_msg);
-        ConstructMessage(kIAm, get_name() + kInternalDelim, i_am_msg);
+        ConstructIAmMessage(kIAm, kServerP2, get_name() + kInternalDelim, i_am_msg);
 
         string message = you_are_msg;
         message.pop_back();
@@ -738,14 +792,14 @@ void Server::HandleInitialServerHandshake(int port, int fd, const std::vector<st
 }
 
 string Server::CreateName() {
-    return (get_name() + kName + to_string(vclock_[name_]));
+    return (get_name() + kName + to_string(vclock_[get_name()]));
 }
 
 void Server::SendOrAskName(int fd) {
     if (!get_name().empty())
     {
         string msg;
-        ConstructIAmMessage(kIAm, kServer, get_name() + kInternalDelim, msg);
+        ConstructIAmMessage(kIAm, kServerP1, get_name() + kInternalDelim, msg);
         SendMessageToServerByFd(fd, msg);
     }
     else {
@@ -875,7 +929,7 @@ void Server::ExtractAEP2Message(const string& committed_writes, const string& te
     }
     writes = split(tent_writes, kComma[0]);
 
-    if(writes.size())
+    if(am_primary_ && writes.size())
         from.set_csn(max_csn_+1);
     for (auto &p : writes)
     {
@@ -884,8 +938,10 @@ void Server::ExtractAEP2Message(const string& committed_writes, const string& te
         int temp_csn;
 
         // check if this write already present in committed or tentative
-        if (vclock_[parts[1]] >=  stoi(parts[2]) ) {
-            continue;
+        if(vclock_.find(parts[1]) != vclock_.end()) {
+            if (vclock_[parts[1]] >=  stoi(parts[2]) ) {
+                continue;
+            }
         }
 
         if (am_primary_) {
@@ -936,7 +992,6 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
         }
         else if (type == kDelete)
         {
-            //TODO: what to write in undo log when song does not exist for deletion
             if (w.get_csn() == INT_MAX)
             {
                 if(database_.find(song) != database_.end())
@@ -954,6 +1009,18 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
         {
             string name = w.get_sname() + kName + to_string(w.get_accept_ts());
             // vclock_[name] = 0;
+            
+            
+            // incorrect assert because this might be a commit notification in which case
+            // your vc for w.get_sname() can be greater than the commit notification's ts
+            // because you have some tentative writes with the same w.get_sname()
+            
+            // if(vclock_.find(name) != vclock_.end())
+                // D(assert(vclock_[name] <= w.get_accept_ts());)
+
+            // updating vc of the server who has been created using this create write
+            vclock_[name] = w.get_accept_ts();
+
             if (w.get_csn() != INT_MAX)
                 max_csn_ = w.get_csn();
         }
@@ -964,11 +1031,28 @@ void Server::ExecuteCommandsOnDatabase(IdTuple from)
                 max_csn_ = w.get_csn();
         }
 
-        D(assert(vclock_[w.get_sname()] <= w.get_accept_ts());)
+        // cout << "S" << get_pid() << "-------------" 
+        // <<  w.get_sname() <<"," << vclock_[w.get_sname()]
+        // << "," << w.get_accept_ts() << "," << type << "," 
+        // << song << "," << url << endl;
+
+        // incorrect assert because this might be a commit notification in which case
+        // your vc for w.get_sname() can be greater than the commit notification's ts
+        // because you have some tentative writes with the same w.get_sname()
+
+        // D(assert(vclock_[w.get_sname()] <= w.get_accept_ts());)
 
         // required for writes sent by others
-        if (vclock_[w.get_sname()] < w.get_accept_ts())
+        if (vclock_.find(w.get_sname()) == vclock_.end() || vclock_[w.get_sname()] < w.get_accept_ts())
             vclock_[w.get_sname()] = w.get_accept_ts();
+
+        // IMPORTANT NOTE:
+        // Suppose I am S2. Above update can create a new entry in vc for 
+        // a server S0 whom I haven't talked to yet, but I received a create write from S1 with
+        // get_sname() = S0.
+        // 
+        // Make sure that later when I do I-AM-SERVER(p1)(p2) handshake with S0, I DO NOT reset
+        // S0's entry in my VC to 0
 
         //updating vector clock if behind. it will be behind for new writes
         // int s_clock = CompleteV(w.get_sname());
@@ -1019,10 +1103,10 @@ void Server::WaitForAck(int fd)
     int num_bytes;
 
     bool ack = false;
-    while (!ack) {     // connection with server has timeout
+    while (!ack) {
         if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-            // D(cout << "S" << get_pid()
-            //     << " : ERROR in receiving ACK, fd=" << fd << endl;)
+            D(cout << "S" << get_pid()
+                << " : ERROR in receiving ACK, fd=" << fd << endl;)
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "S" << get_pid()

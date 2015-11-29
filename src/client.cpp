@@ -113,18 +113,19 @@ void Client::WaitForDone(const int server_port) {
     int fd = get_server_fd(server_port);
 
     bool done = false;
-    while (!done) { // connection with server has timeout
+    while (!done) {
+        done = true;
         if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-            // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
-        }
-        else if (num_bytes == 0) {   //connection closed
-            D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+            D(cout << "C" << get_pid() << " : ERROR in receiving DONE from S, fd=" << fd << endl;)
             RemoveServerFromSets(server_port);
             close(fd);
-            done = true;
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "C" << get_pid() << " : ERROR Connection closed by S, fd=" << fd << endl;)
+            RemoveServerFromSets(server_port);
+            close(fd);
         }
         else {
-            done = true;
             buf[num_bytes] = '\0';
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
@@ -132,6 +133,7 @@ void Client::WaitForDone(const int server_port) {
                 if (token[0] == kDone) {
                     D(cout << "C" << get_pid() << " : DONE received" << endl;)
                 } else {
+                    done = false;
                     D(cout << "C" << get_pid() << " : ERROR Unexpected message received at fd="
                       << fd << ": " << msg << endl;)
                 }
@@ -240,7 +242,7 @@ bool Client::CheckSessionGuaranteesReads(unordered_map<string, int>& server_vc) 
  */
 unordered_map<string, int> Client::GetServerVectorClock(int server_port) {
     int fd = get_server_fd(server_port);
-    string message = kServerVC + kInternalDelim + kMessageDelim;
+    string message = kServerVC + kInternalDelim + kClient + kInternalDelim + kMessageDelim;
     SendMessageToServer(message, server_port);
 
     char buf[kMaxDataSize];
@@ -248,19 +250,19 @@ unordered_map<string, int> Client::GetServerVectorClock(int server_port) {
     unordered_map<string, int> ret;
 
     bool done = false;
-    while (!done) { // connection with server has timeout
+    while (!done) {
+        done = true;
         if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-            // cout << errno << strerror(errno) << endl;
-            // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+            D(cout << "C" << get_pid() << " : ERROR in receiving VC from S, fd=" << fd << endl;)
+            RemoveServerFromSets(server_port);
+            close(fd);
         }
         else if (num_bytes == 0) {   //connection closed
-            D(cout << "C" << get_pid() << " : ERROR Connection closed by server, fd=" << fd << endl;)
-            done = true;
+            D(cout << "C" << get_pid() << " : ERROR Connection closed by S, fd=" << fd << endl;)
             RemoveServerFromSets(server_port);
             close(fd);
         }
         else {
-            done = true;
             buf[num_bytes] = '\0';
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
@@ -271,6 +273,7 @@ unordered_map<string, int> Client::GetServerVectorClock(int server_port) {
                     D(cout << "C" << get_pid() << " : VC received: " << token[1] << endl;)
                     ret = StringToUnorderedMap(token[1]);
                 } else {
+                    done = false;
                     D(cout << "C" << get_pid() << " : ERROR Unexpected message received at fd="
                       << fd << ": " << msg << endl;)
                 }
@@ -286,19 +289,19 @@ void Client::GetWriteID(int server_port) {
     int num_bytes;
 
     bool done = false;
-    while (!done) { // connection with server has timeout
+    while (!done) {
+        done = true;
         if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-            // cout << errno << strerror(errno) << endl;
-            // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
-        }
-        else if (num_bytes == 0) {   //connection closed
-            D(cout << "C" << get_pid() << " : ERROR Connection closed by server, fd=" << fd << endl;)
+            D(cout << "C" << get_pid() << " : ERROR in receiving WRITEID from S, fd=" << fd << endl;)
             RemoveServerFromSets(server_port);
             close(fd);
-            done = true;
+        }
+        else if (num_bytes == 0) {   //connection closed
+            D(cout << "C" << get_pid() << " : ERROR Connection closed by S, fd=" << fd << endl;)
+            RemoveServerFromSets(server_port);
+            close(fd);
         }
         else {
-            done = true;
             buf[num_bytes] = '\0';
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
@@ -315,6 +318,7 @@ void Client::GetWriteID(int server_port) {
                     D(cout << "C" << get_pid() << " : WRITEID received: " << token[1] << endl;)
                     write_vector_[name] = timestamp;
                 } else {
+                    done = false;
                     D(cout << "C" << get_pid() << " : ERROR Unexpected message received at fd="
                       << fd << ": " << msg << endl;)
                 }
@@ -330,13 +334,17 @@ string Client::GetResultAndRelWrites(int server_port) {
     string url;
 
     int count = 0;
-    while (count != 2) { // connection with server has timeout
+    while (count != 2) {
         if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
             // cout << errno << strerror(errno) << endl;
-            // D(cout << "C" << get_pid() << " : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+            D(cout << "C" << get_pid() 
+                << " : ERROR in receiving Result/Rel Writes from S, fd=" << fd << endl;)
+            count = 2;
+            RemoveServerFromSets(server_port);
+            close(fd);
         }
         else if (num_bytes == 0) {   //connection closed
-            D(cout << "C" << get_pid() << " : ERROR Connection closed by someone, fd=" << fd << endl;)
+            D(cout << "C" << get_pid() << " : ERROR Connection closed by S, fd=" << fd << endl;)
             count = 2;
             RemoveServerFromSets(server_port);
             close(fd);
@@ -420,7 +428,7 @@ void* ReceiveFromMaster(void* _C) {
     Client* C = (Client*)_C;
     char buf[kMaxDataSize];
     int num_bytes;
-    // D(cout << "C" << C->get_pid() << " : Receiving from M" << endl;)
+
     while (true) {  // always listen to messages from the master
         num_bytes = recv(C->get_master_fd(), buf, kMaxDataSize - 1, 0);
         if (num_bytes == -1) {

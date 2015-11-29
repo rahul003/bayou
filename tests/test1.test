@@ -17,7 +17,11 @@ get 6 song1
 printLog 0
 printLog 1
 start
+stabilize
 get 6 song1
 get 5 song1
 printLog 0
 printLog 1
+joinServer 8
+stabilize
+printLog 8

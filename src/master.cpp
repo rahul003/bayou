@@ -288,16 +288,15 @@ void Master::WaitForDone(const int fd) {
     int num_bytes;
 
     bool done = false;
-    while (!done) {     // connection with server has timeout
+    while (!done) {
+        done = true;
         if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-            // D(cout << "M  : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+            D(cout << "M  : ERROR in receiving DONE from someone, fd=" << fd << endl;)
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
-            done = true;
         }
         else {
-            done = true;
             buf[num_bytes] = '\0';
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
@@ -305,6 +304,7 @@ void Master::WaitForDone(const int fd) {
                 if (token[0] == kDone) {
                     D(cout << "M  : DONE received" << endl;)
                 } else {
+                    done = false;
                     D(cout << "M  : Unexpected message received at fd="
                       << fd << ": " << msg << endl;)
                 }
@@ -328,16 +328,15 @@ void Master::WaitForLogResponse(const int server_id) {
     int num_bytes;
 
     bool done = false;
-    while (!done) {     // connection with server has timeout
+    while (!done) {
+        done = true;
         if ((num_bytes = recv(get_server_fd(server_id), buf, kMaxDataSize - 1, 0)) == -1) {
-            // D(cout << "M  : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+            D(cout << "M  : ERROR in receiving Log from S" << server_id << endl;)
         }
         else if (num_bytes == 0) {   //connection closed
-            D(cout << "M  : ERROR Connection closed by server S:" << server_id << endl;)
-            done = true;
+            D(cout << "M  : ERROR Connection closed by server S" << server_id << endl;)
         }
         else {
-            done = true;
             buf[num_bytes] = '\0';
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
@@ -347,6 +346,7 @@ void Master::WaitForLogResponse(const int server_id) {
                     D(cout << "M  : WriteLog received" << endl;)
                     ProcessAndPrintLog(server_id, token[1]);
                 } else {
+                    done = false;
                     D(cout << "M  : Unexpected message received by server S:"
                       << server_id << ": " << msg << endl;)
                 }
@@ -373,16 +373,15 @@ void Master::WaitForPortMessage(const int fd) {
     int num_bytes;
 
     bool done = false;
-    while (!done) {     // connection with server has timeout
+    while (!done) {
+        done = true;
         if ((num_bytes = recv(fd, buf, kMaxDataSize - 1, 0)) == -1) {
-            // D(cout << "M  : ERROR in receiving PORT from someone, fd=" << fd << endl;)
+            D(cout << "M  : ERROR in receiving PORT from someone, fd=" << fd << endl;)
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "M  : ERROR Connection closed by someone, fd=" << fd << endl;)
-            done = true;
         }
         else {
-            done = true;
             buf[num_bytes] = '\0';
             std::vector<string> message = split(string(buf), kMessageDelim[0]);
             for (const auto &msg : message) {
@@ -412,6 +411,7 @@ void Master::WaitForPortMessage(const int fd) {
                           << fd << ": " << msg << endl;)
                     }
                 } else {
+                    done = false;
                     D(cout << "M  : Unexpected message received at fd="
                       << fd << ": " << msg << endl;)
                 }
@@ -686,21 +686,33 @@ void Master::ReadTest() {
 
 void Master::StabilizeMode(){
     set<set<int> > components = servers_.GetConnectedComponents();
-    string msg = kServerVC + kInternalDelim + kMessageDelim;
+
+    string msg = kServerVC + kInternalDelim + kMaster + kInternalDelim + kMessageDelim;
     for(auto &comp : components)
     {
         auto it = comp.begin();
         unordered_map<string, int> prev_vclock;
+        int prev_csn, csn;
         while(it!=comp.end())
         {
             SendMessageToServer((*it), msg);
-            unordered_map<string, int> vclock = WaitForVC(*it);
-            if(it==comp.begin())
+            string message = WaitForVC(*it);
+            unordered_map<string, int> vclock;
+
+            std::vector<string> token = split(message, kInternalDelim[0]);
+            vclock = StringToUnorderedMap(token[1]);
+            csn = stoi(token[2]);
+
+            if(it==comp.begin()) {
                 prev_vclock = vclock;
-            if(vclock != prev_vclock)
+                prev_csn = csn;
+                it++;
+            }
+            else if(vclock != prev_vclock || csn != prev_csn)
             {
                 it = comp.begin();
-                usleep(kBusyWaitSleep);
+                usleep(kAntiEntropyInterval);
+                usleep(kAntiEntropyInterval);
             }
             else
                 it++;
@@ -709,18 +721,18 @@ void Master::StabilizeMode(){
     }
 }
 
-unordered_map<string, int> Master::WaitForVC(int sid){
+string Master::WaitForVC(int sid){
     char buf[kMaxDataSize];
     int num_bytes;
-    unordered_map<string, int> rval;
+    string rval;
     bool done = false;
-    while (!done) {     // connection with server has timeout
+    while (!done) {
+        done = true;
         if ((num_bytes = recv(get_server_fd(sid), buf, kMaxDataSize - 1, 0)) == -1) {
-            // D(cout << "M  : ERROR in receiving DONE from someone, fd=" << fd << endl;)
+            D(cout << "M  : ERROR in receiving VC from S" << sid << endl;)
         }
         else if (num_bytes == 0) {   //connection closed
             D(cout << "M  : ERROR Connection closed by server S" << sid << endl;)
-            done = true;
         }
         else {
             buf[num_bytes] = '\0';
@@ -728,15 +740,16 @@ unordered_map<string, int> Master::WaitForVC(int sid){
             for (const auto &msg : message) {
                 std::vector<string> token = split(string(msg), kInternalDelim[0]);
                 if (token[0] == kServerVC) {
-                    done = true;
-                    D(assert(token.size()==2);)
-                    rval = StringToUnorderedMap(token[1]);
+                    D(assert(token.size()==3);)
+                    rval = msg;
                 } else {
+                    done = false;
                     D(cout<<"M  : ERROR Unexpected message received in WaitForVC from "<<sid<<": "<<msg<<endl;)
                 }
             }
         }
     }
+    return rval;
 }
 
 bool Master::is_client_id(int id){
