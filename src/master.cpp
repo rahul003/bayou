@@ -20,7 +20,7 @@
 #include "pthread.h"
 using namespace std;
 
-// #define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #  define D(x) x
@@ -28,7 +28,7 @@ using namespace std;
 #  define D(x)
 #endif // DEBUG
 
-#define SUBMISSION
+// #define SUBMISSION
 
 #ifdef SUBMISSION
 #  define S(x) x
@@ -381,13 +381,13 @@ void Master::WaitForLogResponse(const int server_id) {
 void Master::ProcessAndPrintLog(int id, const string& log)
 {
     vector<string> writes = split(log,kInternalListDelim[0]);
-    // fstream f((kLogFileName + to_string(file_num_)+","+to_string(id)), fstream::out);
+    fstream f((kLogFileName + to_string(file_num_)+","+to_string(id)), fstream::out);
     for(auto&w: writes) {
         D(f << w << endl;)
         S(cout<< w << endl;)
     }
-    // D(f << "----------------"<<endl;)
-    // f.close();
+    D(f << "----------------"<<endl;)
+    f.close();
     file_num_++;
 }
 /**

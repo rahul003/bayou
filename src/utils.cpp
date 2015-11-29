@@ -13,7 +13,7 @@
 #include <assert.h>
 
 using namespace std;
-// #define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #  define D(x) x

@@ -26,6 +26,9 @@ stdin.
 ### Debug mode
 By default, the debug mode is on. Execution will be accompanied with a deluge of debugging messages on the terminal. These debug messages show the progress of the protocol. Debugging can be turned off by removing `#define DEBUG` from all the `.cpp` files (or selectively from those files whose debug messages need to be turned off).
 
+### Killing processes
+Should there be an unforeseen requirement, or a bug in the implementation which necessitates premature termination of the program, execute the `kill.sh` script. Simply killing the running executable might not kill all the processes (since the master program spawns multiple processes internally), or may leave ports bound.
+
 ### Note:
 1. Long tests might require some time to finish. Be patient; afterall, Bayou only provides **eventual** consistency.
 2. Following characters are not allowed in song names or URLs (because our implementation heavily relies on these characters for delimiting messages propogating through the system.
